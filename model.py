@@ -34,8 +34,8 @@ def WACCUS_EPR(
     pKN39=46000,        #[SEK/tpl] [IVL]
 
     # levers 
-    level_tax=2900,           #[SEK/tpl] [IVL], should be adjusted for only ~75% carbon content
-    level_additional=10000-2900,  #[SEK/tpl]
+    level_tax=2000,           #[SEK/tpl] [IVL], should be adjusted for only ~75% carbon content
+    level_additional=5000,  #[SEK/tpl]
     # taxtarget=["KN39"], # implement target later
 
 
@@ -56,7 +56,11 @@ def WACCUS_EPR(
     floor_price = 500       #[SEK/m2]
     cost_increase = floor_plastic * (level_tax/(1000*0.75)) # [SEK/m2]
     cost_increase = cost_increase/floor_price *100 #[%]
-    print(np.round(cost_increase), "% more expensive <- vinyl floor products")
+    print(cost_increase, "% more expensive <- vinyl floor products")
+    tire_carbon = 7.872 #[kgC/tire]
+    cost_increase = tire_carbon * (level_tax/(1000*0.75)) # [SEK/tire]
+    cost_increase = cost_increase/1200 *100 #[%]
+    print(cost_increase, "% more expensive <- tire products")
     print("IS PRODUCTCOST DETAIL LEVEL OK FOR NOW? - NO, REDO FOR 1 SIMPLE + 1 COMPLEX PRODUCT\n")
 
     # subsidy costs
