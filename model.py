@@ -1,109 +1,134 @@
 # This is the model.py file
 import numpy as np
-def levelize(capex, dr=0.08, lifetime=25, capacity=None):
-    """
-    Calculate the levelized annual cost of a capital expenditure (CAPEX),
-    optionally per unit of capacity (e.g., per ton treated).
+import pandas as pd
 
-    Parameters:
-    - capex (float): Total capital cost (e.g., in $ or €).
-    - dr (float): Discount rate as a decimal (e.g., 0.05 for 5%).
-    - lifetime (int): Economic lifetime in years.
-    - capacity (float, optional): Annual capacity/output (e.g., tons treated/year).
 
-    Returns:
-    - float: Levelized CAPEX (total or per unit of capacity if specified).
-    """
-    if dr == 0:
-        annual_cost = capex / lifetime
+def plan_CCU(plant):
+    CCU = 1
+    bid = 2
+    Ppenalty = 3
+    Qpenalty = 4
+    return CCU, bid, Ppenalty, Qpenalty
+
+def plan_CCS(plant,x):
+
+    # burn fuel
+    mfuel = plant["Qwaste"] / (x["LHV"]/3600) /3600 #[kgf/s]
+    mCO2 = mfuel* x["Ccontent"] * 44/12             #[kgCO2/s]
+    Vfluegas = x["vfluegas"] * mfuel                #[Nm3/s]
+
+    # capture and condition CO2
+    mcaptured = mCO2 * 0.90                         #[kgCO2/s]
+    Qreb = mcaptured * x["qreb"]                    #[MW]
+    Pcapture = 0.1 * mcaptured/1000*3600            #[MW] [Beiron, 2022]
+    Pcondition = 0.37 * mcaptured                   #[MW] [Kumar, 2023]
+
+    # penalize CHP
+    P = plant["P"] * (1 - Qreb/plant["Qwaste"])     # assuming live steam is used for reboiler
+    P = P - Pcapture - Pcondition
+    Qdh = plant["Qdh"] * (1 - Qreb/plant["Qwaste"])
+
+    # recover heat up to 100 % of original DH - use whatever power is available for HP
+    Qhex = 0.64 * Qreb                              #[MW] [Beiron, 2022]
+    Qdiff = plant["Qdh"] - (Qdh + Qhex)
+    if Qdiff < 0:
+        raise ValueError
     else:
-        crf = (dr * (1 + dr) ** lifetime) / ((1 + dr) ** lifetime - 1)
-        annual_cost = capex * crf
+        Whp = Qdiff / x["COP"]
+        if Whp > P: 
+            Whp = P
+    Qdh = Qdh + Qhex + Whp*x["COP"]
+    P -= Whp
+    Ppenalty = (plant["P"] - P) * plant["FLH"]      #[MWh/yr]
+    Qpenalty = (plant["Qdh"] - Qdh) * plant["FLH"]  #[MWh/yr]
 
-    if capacity:
-        return annual_cost / capacity  # cost per unit
-    else:
-        return annual_cost  # total annualized cost
+    # estimate CAPEX and construct a bid of CAPEX+transport+storage
+    CAPEX_CC = 4121.7 * Vfluegas ** 0.6498          #[kEUR]
+    CAPEX_CL = 7004.6 * mcaptured ** 0.5243         #[kEUR] NOTE only compression cost
+    print(CAPEX_CC)
+    print(CAPEX_CL)
+
+    FCCS = 1
+    BECCS = 1
+    bid = 2
+    Ppenalty = 3
+    Qpenalty = 4
+    return FCCS, BECCS, bid, Ppenalty, Qpenalty
     
 def WACCUS_EPR( 
     # uncertainties
-    mKN39=884393,       #[t/a] plastic products mappable under KN39 [IVL]
-    mtotal=11000000,    #[t/a] supplied-to-market is estimated as total-incinterated (including imports) [Naturvardsverket]
-    recyclable=0.15,    #[-] fraction of simple products possible to recycle mechanically
+    mpackaging = 1,
+    mbuildings = 1,
+    mKN39 = 884393,     #[t/a] plastic products mappable under KN39 [IVL]
+    mtotal = 11000000,  #[t/a] estimated as total-incinterated (including imports) [Naturvardsverket]
 
-    pKN39=46000,        #[SEK/tpl] [IVL]
+    recyclable = 0.15,  #[-] fraction of simple products possible to recycle mechanically
+    pproducts = 2,
+    pKN39 = 46000,      #[SEK/tpl] [IVL]
+
+    LHV = 11,           #[MJ/kgf] [Hammar]
+    vfluegas = 4.7,     #[Nm3/kgf]
+    Ccontent = 0.298,   #[kgC/kgf]
+    fossil = 0.40,      #[-]
+    qreb = 3.5,         #[MJ/kgCO2]
+    COP = 3,
 
     # levers 
-    level_tax=2000,           #[SEK/tpl] [IVL], should be adjusted for only ~75% carbon content
-    level_additional=5000,  #[SEK/tpl]
-    # taxtarget=["KN39"], # implement target later
+    tax = [800,1600,2400,3200],
+    groups = [0,1,2,3],
 
-
+    # constants
+    plants = None,
+    case = ["CCUS"]         #["CCUS", "CCU", "CCS"] conduct analysis separately for the three cases
 ):
-    # tax revenues
-    msimple = mKN39 * recyclable
-    mcomplex = mKN39 * (1-recyclable)
-    tax_simple = (msimple + mcomplex) * level_tax #[SEK/a], ~10^9 SEK/a
-    tax_complex = mcomplex * level_additional
-    print(tax_simple, "Too much money for sorting facilities, probably! But makes sense to prioritize sorting etc..? Those who need more money are thermochemical measures!")
-    print(tax_complex)
-    print("IS TAX DETAIL LEVEL OK FOR NOW? - YES, SIMILAR TO IVL, MAYBE ADD TIME-SCENARIOS\n")
+    x = {
+        "mpackaging": mpackaging,
+        "mbuildings": mbuildings,
+        "mKN39": mKN39,
+        "mtotal": mtotal,
+        "recyclable": recyclable,
+        "pproducts": pproducts,
+        "pKN39": pKN39,
+        "LHV": LHV,
+        "vfluegas": vfluegas,
+        "Ccontent": Ccontent,
+        "fossil": fossil,
+        "qreb": qreb,
+        "COP": COP,
+        "tax": tax,
+        "groups": groups
+    }
 
-    # product cost increases
-    cost_increase = (level_tax + level_additional)/pKN39 *100 #[%], assuming the complex tax level
-    print(np.round(cost_increase), "% more expensive <- KN39 products")
-    floor_plastic = 0.594   #[kgC/m2]
-    floor_price = 500       #[SEK/m2]
-    cost_increase = floor_plastic * (level_tax/(1000*0.75)) # [SEK/m2]
-    cost_increase = cost_increase/floor_price *100 #[%]
-    print(cost_increase, "% more expensive <- vinyl floor products")
-    tire_carbon = 7.872 #[kgC/tire]
-    cost_increase = tire_carbon * (level_tax/(1000*0.75)) # [SEK/tire]
-    cost_increase = cost_increase/1200 *100 #[%]
-    print(cost_increase, "% more expensive <- tire products")
-    print("IS PRODUCTCOST DETAIL LEVEL OK FOR NOW? - NO, REDO FOR 1 SIMPLE + 1 COMPLEX PRODUCT\n")
+    # RQ1: tax revenues
 
-    # subsidy costs
-    capex = 350*10**6               #[SEK] [Sievert, Lund] says 350 million, so 134 million was maybe the subsidy?
-    capacity = 10000*0.75           #[tC/a]
-    brista = levelize(capex, capacity=capacity)
-    print("presort", brista)        #[SEK/tC]
+    # RQ2: subsidy costs
+    if case == "CCUS":
+        CCU_names = ["Renova"]
+        CCS_names = ["Händelöverket"]
+    elif case == "CCU":
+        CCU_names = ["Name1", "Name2", "Name3", "Name4", "Name5", "Name6"]
+        CCS_names = None
+    elif case == "CCS":
+        CCU_names = None
+        CCS_names = ["Name1", "Name2", "Name3", "Name4", "Name5", "Name6"]
 
-    capex = 1000*10**6              #[SEK]
-    capacity = 200000*0.75          #[tC/a]
-    motala = levelize(capex, capacity=capacity)
-    print("aftersort", motala)      #[SEK/tC]
+    for _, plant in plants.iterrows():
+        if plant["Name"] in CCS_names:
+            FCCS, BECCS, bid, Ppenalty, Qpenalty = plan_CCS(plant, x)
+        if plant["Name"] in CCU_names:
+            CCU, bid, Ppenalty, Qpenalty = plan_CCU(plant)
 
-    capex = 16000*10**6             #[SEK]
-    capacity = 650000*0.75          #[tC/a]
-    borealis = levelize(capex, capacity=capacity)
-    print("TCR", borealis)          #[SEK/tC]
+    # RQ2: reversed auction simulation
 
-    CCU = (10666+2666)/2            #based on Beiron
-    print("CCU", CCU)               #[SEK/tC]
-
-    CCS = 2500*3.66
-    print("CCS", CCS)               #[SEK/tC]
-    print("IS SUBSIDY DETAIL LEVEL OK FOR NOW? - NO, CALCULATE FOR SPECIFIC CITIES + TCR\n")
-
-    # reversed auction simulation
-    sorting_realized = tax_simple / brista # [tC/a]
-    print("n bristas = ", sorting_realized/(10000*0.75))
-    TCR_realized = tax_complex / borealis # [tC/a]
-    print("n TCR = ", TCR_realized/(650000*0.75))
-    CCU_realized = tax_complex / CCU # [tC/a]
-    print("n CCU = ", CCU_realized/100000) #assuming 100ktC per site
-    CCS_realized = tax_complex / CCS # [tC/a]
-    print("n CCS = ", CCS_realized/100000) #assuming 100ktC per site
-    print("IS AUCTION DETAIL LEVEL OK FOR NOW? - NO, IT MUST PRIORITIZE BETWEEN BIDS\n")
-    print("RETHINK THE SIMPLE FUND - A KPI IS THE _remaining_ FUNDS AVAILABLE FOR COLLECTION/SORTING/RECYCLING, after ALL SORTING IS EXHAUSTED")
+    # RQ3: product cost increases
+    # KN39, cheese, syringe, panel, cable, tire, pedal 
 
     output = 1
     return output
 
 if __name__ == "__main__":
 
-    output = WACCUS_EPR()
+    plants = pd.read_csv("data/plants.csv")
+    output = WACCUS_EPR(plants=plants, case="CCUS")
+
     print("\n---- Conclusions ----")
-    print("At a fairly high additional tax for complex products, a decent amount of TCR/CCUS projects can be realized")
-    print("Loads of sorting facilities can be realized - these are relatively cheap")
