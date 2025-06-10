@@ -1,0 +1,3 @@
+Each directory (so repo) can now have it's own environment, and thus tailored packages.
+In this repo, I created a .waccus environment.
+I will install packages in this environment.
