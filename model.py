@@ -2,6 +2,39 @@
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
+from scipy.interpolate import interp1d
+
+# Global assumptions
+SEK_TO_EUR = 0.091  # [EUR/SEK] Exchange rate
+
+def cost_transport():
+    """
+    Creates interpolation functions for transport costs based on distance.
+    Converts costs from SEK to EUR internally.
+    
+    Returns:
+        dict: Dictionary containing interpolation functions for different scenarios (all costs in EUR):
+            Keys: 'optimist_1Mt', 'pessimist_1Mt', 'optimist_2Mt', 'pessimist_2Mt', 'optimist_3Mt', 'pessimist_3Mt'
+    """
+    # Read transport costs data
+    df = pd.read_csv("data/transport_costs.csv")
+    
+    # Convert costs from SEK to EUR
+    cost_columns = ['optimist_1Mt', 'pessimist_1Mt', 'optimist_2Mt', 
+                   'pessimist_2Mt', 'optimist_3Mt', 'pessimist_3Mt']
+    df[cost_columns] = df[cost_columns] * SEK_TO_EUR
+    
+    # Create interpolation functions for each scenario
+    transport_costs = {
+        'optimist_1Mt': interp1d(df['distance'], df['optimist_1Mt'], kind='linear', fill_value='extrapolate'),
+        'pessimist_1Mt': interp1d(df['distance'], df['pessimist_1Mt'], kind='linear', fill_value='extrapolate'),
+        'optimist_2Mt': interp1d(df['distance'], df['optimist_2Mt'], kind='linear', fill_value='extrapolate'),
+        'pessimist_2Mt': interp1d(df['distance'], df['pessimist_2Mt'], kind='linear', fill_value='extrapolate'),
+        'optimist_3Mt': interp1d(df['distance'], df['optimist_3Mt'], kind='linear', fill_value='extrapolate'),
+        'pessimist_3Mt': interp1d(df['distance'], df['pessimist_3Mt'], kind='linear', fill_value='extrapolate')
+    }
+    
+    return transport_costs
 
 def estimate_CAPEX(mcaptured, x):
     """
@@ -37,7 +70,7 @@ def plan_CCU(plant):
     Qpenalty = 4
     return CCU, bid, Ppenalty, Qpenalty
 
-def plan_CCS(plant,x):
+def plan_CCS(plant, x, transport_costs):
     # burn fuel
     mfuel = plant["Qwaste"] / (x["LHV"]/3600) /3600 #[kgf/s]
     mCO2 = mfuel* x["Ccontent"] * 44/12             #[kgCO2/s]
@@ -73,7 +106,10 @@ def plan_CCS(plant,x):
     print("CAPEX =", CAPEX) #[kEUR]
     print(levelized_CAPEX*1000) #[kEUR/t] -> [EUR/t]
 
-    print("TODO: add transport and storage COST FUNCTION")
+    # Example of using transport costs (you can modify this based on your needs)
+    distance = 300  # km - this should come from your actual data
+    transport_cost = transport_costs['optimist_1Mt'](distance)  # EUR/t
+    print(f"Transport cost at {distance} km: {transport_cost:.2f} EUR/t")
 
     FCCS = 1
     BECCS = 1
@@ -81,7 +117,7 @@ def plan_CCS(plant,x):
     Ppenalty = 3
     Qpenalty = 4
     return FCCS, BECCS, bid, Ppenalty, Qpenalty
-    
+
 def WACCUS_EPR( 
     # uncertainties
     mpackaging = 1,
@@ -118,6 +154,7 @@ def WACCUS_EPR(
     k = 0.6857,             #[-] [Stenström, 2025]
     CAPEX_ref = 3715 * 87,  # [MNOK] -> [kEUR] NOTE: can pick other CAPEX from source:[Gassnova, Demonstrasjon av Fullskala CO2-Håndtering - Rapport for Avsluttet Forprosjekt]
     captured_ref = 400,     # [ktCO2/yr]
+    transport_costs = None,  # Dictionary of transport cost interpolation functions
 ):
     x = {
         "mpackaging": mpackaging,
@@ -159,7 +196,7 @@ def WACCUS_EPR(
 
     for _, plant in plants.iterrows():
         if plant["Name"] in CCS_names:
-            FCCS, BECCS, bid, Ppenalty, Qpenalty = plan_CCS(plant, x)
+            FCCS, BECCS, bid, Ppenalty, Qpenalty = plan_CCS(plant, x, transport_costs)
         if plant["Name"] in CCU_names:
             CCU, bid, Ppenalty, Qpenalty = plan_CCU(plant)
 
@@ -197,8 +234,21 @@ if __name__ == "__main__":
     print(" -> Demonstrasjon av Fullskala CO2-Håndtering - Rapport for Avsluttet Forprosjekt\n")
     print("Use this^ to estimate CAPEX (includes C&L) - then add energy OPEX etc.!")
     
+    # Get transport cost interpolation functions
+    transport_costs = cost_transport()
+    
+    # Example usage of transport cost functions
+    test_distance = 1500  # km
+    print("\nTransport Cost Example:")
+    print(f"Transport costs at {test_distance} km distance:")
+    print(f"1Mt scenario - Optimistic: {transport_costs['optimist_1Mt'](test_distance):.2f} EUR/t, Pessimistic: {transport_costs['pessimist_1Mt'](test_distance):.2f} EUR/t")
+    print(f"2Mt scenario - Optimistic: {transport_costs['optimist_2Mt'](test_distance):.2f} EUR/t, Pessimistic: {transport_costs['pessimist_2Mt'](test_distance):.2f} EUR/t")
+    print(f"3Mt scenario - Optimistic: {transport_costs['optimist_3Mt'](test_distance):.2f} EUR/t, Pessimistic: {transport_costs['pessimist_3Mt'](test_distance):.2f} EUR/t")
+    
     # reading data from the present study and running EPR function
     plants = pd.read_csv("data/plants.csv")
-    output = WACCUS_EPR(plants=plants, k=k, case="CCUS")
+    output = WACCUS_EPR(plants=plants, k=k, case="CCUS", transport_costs=transport_costs)
 
+    print("TODO: T&S costs are implemented, but the CHP plants do not have a distance, port, and destination yet!")
+    print("TODO: Also, the 1Mt, 2Mt, 3Mt scenarios are not implemented yet! Also the optimistic and pessimistic scenarios are not implemented yet!")
     print("\n---- Conclusions ----")
