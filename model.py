@@ -3,17 +3,17 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 from scipy.interpolate import interp1d
+import matplotlib.pyplot as plt
+import searoute as sr
 
-# Global assumptions
-SEK_TO_EUR = 0.091  # [EUR/SEK] Exchange rate
 
 def cost_transport():
     """
-    Creates interpolation functions for transport costs based on distance.
+    Creates linear regression models for transport costs based on distance.
     Converts costs from SEK to EUR internally.
     
     Returns:
-        dict: Dictionary containing interpolation functions for different scenarios (all costs in EUR):
+        dict: Dictionary containing linear regression models for different scenarios (all costs in EUR):
             Keys: 'optimist_1Mt', 'pessimist_1Mt', 'optimist_2Mt', 'pessimist_2Mt', 'optimist_3Mt', 'pessimist_3Mt'
     """
     # Read transport costs data
@@ -24,17 +24,67 @@ def cost_transport():
                    'pessimist_2Mt', 'optimist_3Mt', 'pessimist_3Mt']
     df[cost_columns] = df[cost_columns] * SEK_TO_EUR
     
-    # Create interpolation functions for each scenario
-    transport_costs = {
-        'optimist_1Mt': interp1d(df['distance'], df['optimist_1Mt'], kind='linear', fill_value='extrapolate'),
-        'pessimist_1Mt': interp1d(df['distance'], df['pessimist_1Mt'], kind='linear', fill_value='extrapolate'),
-        'optimist_2Mt': interp1d(df['distance'], df['optimist_2Mt'], kind='linear', fill_value='extrapolate'),
-        'pessimist_2Mt': interp1d(df['distance'], df['pessimist_2Mt'], kind='linear', fill_value='extrapolate'),
-        'optimist_3Mt': interp1d(df['distance'], df['optimist_3Mt'], kind='linear', fill_value='extrapolate'),
-        'pessimist_3Mt': interp1d(df['distance'], df['pessimist_3Mt'], kind='linear', fill_value='extrapolate')
-    }
+    # Create linear regression models for each scenario
+    transport_costs = {}
+    r2_scores = {}
     
-    return transport_costs
+    for scenario in cost_columns:
+        # Prepare data for regression
+        X = df['distance'].values.reshape(-1, 1)
+        y = df[scenario].values
+        
+        # Create and fit the model
+        model = LinearRegression()
+        model.fit(X, y)
+        
+        # Store the model
+        transport_costs[scenario] = model
+        
+        # Calculate R² score
+        r2_scores[scenario] = model.score(X, y)
+    
+    return transport_costs, r2_scores, df
+
+def precalculate_sea_distances():
+    """
+    Read pre-calculated sea distances between hubs and destinations from CSV.
+    
+    Returns:
+        dict: Dictionary with keys in format 'hub_destination' (e.g., 'stockholm_oygarden')
+             and values as distances in kilometers
+    """
+    # Read pre-calculated distances
+    df = pd.read_csv("data/hubs_destinations.csv")
+    
+    # Initialize dictionary to store distances
+    distances = {}
+    
+    # Create distance entries for each hub-destination pair
+    for _, row in df.iterrows():
+        # Add Oygarden destination
+        key_oygarden = f"{row['hub']}_oygarden"
+        distances[key_oygarden] = row['destination_oygarden']
+        
+        # Add Kalundborg destination
+        key_kalundborg = f"{row['hub']}_kalundborg"
+        distances[key_kalundborg] = row['destination_kalundborg']
+    
+    return distances  # [km]
+
+def sea_distance(origin, destination, distances_dict):
+    """
+    Get pre-calculated sea distance between hub and destination.
+    
+    Args:
+        origin (str): Name of the origin hub
+        destination (str): Name of the destination
+        distances_dict (dict): Dictionary of pre-calculated distances
+    
+    Returns:
+        float: Distance in kilometers
+    """
+    key = f"{origin.lower()}_{destination.lower()}"
+    return distances_dict[key]
 
 def estimate_CAPEX(mcaptured, x):
     """
@@ -53,13 +103,13 @@ def estimate_CAPEX(mcaptured, x):
     mannual = mcaptured/1000*3600 /1000 * x["FLH"]
 
     # Calculate CAPEX using power law model
-    CAPEX = x["CAPEX_ref"] * (mannual / x["captured_ref"]) ** x["k"] #[kEUR]
+    CAPEX = x["CAPEX_ref"] * (mannual / x["captured_ref"]) ** x["k"]  # [kEUR]
     CAPEX *= 1 + x["FOAK"]
     
     # Calculate annualized and levelized CAPEX
     CRF = (x["dr"] * (1 + x["dr"]) ** x["t"]) / ((1 + x["dr"]) ** x["t"] - 1)
-    annualized_CAPEX = CAPEX * CRF #[kEUR/yr]
-    levelized_CAPEX = annualized_CAPEX / (mcaptured/1000*3600 * x["FLH"]) #[(kEUR/yr)/(t/yr)] -> [kEUR/t]
+    annualized_CAPEX = CAPEX * CRF  # [kEUR/yr]
+    levelized_CAPEX = annualized_CAPEX / (mcaptured/1000*3600 * x["FLH"])  # [(kEUR/yr)/(t/yr)] -> [kEUR/t]
     
     return CAPEX, annualized_CAPEX, levelized_CAPEX
 
@@ -70,25 +120,25 @@ def plan_CCU(plant):
     Qpenalty = 4
     return CCU, bid, Ppenalty, Qpenalty
 
-def plan_CCS(plant, x, transport_costs):
+def plan_CCS(plant, x, transport_costs, sea_distances):
     # burn fuel
-    mfuel = plant["Qwaste"] / (x["LHV"]/3600) /3600 #[kgf/s]
-    mCO2 = mfuel* x["Ccontent"] * 44/12             #[kgCO2/s]
-    Vfluegas = x["vfluegas"] * mfuel                #[Nm3/s]
+    mfuel = plant["Qwaste"] / (x["LHV"]/3600) /3600  # [kgf/s]
+    mCO2 = mfuel* x["Ccontent"] * 44/12              # [kgCO2/s]
+    Vfluegas = x["vfluegas"] * mfuel                 # [Nm3/s]
 
     # capture and condition CO2
-    mcaptured = mCO2 * 0.90                         #[kgCO2/s]
-    Qreb = mcaptured * x["qreb"]                    #[MW]
-    Pcapture = 0.1 * mcaptured/1000*3600            #[MW] [Beiron, 2022]
-    Pcondition = 0.37 * mcaptured                   #[MW] [Kumar, 2023] incl. CO2 conditioning
+    mcaptured = mCO2 * 0.90                          # [kgCO2/s]
+    Qreb = mcaptured * x["qreb"]                     # [MW]
+    Pcapture = 0.1 * mcaptured/1000*3600             # [MW] [Beiron, 2022]
+    Pcondition = 0.37 * mcaptured                    # [MW] [Kumar, 2023] incl. CO2 conditioning
 
     # penalize CHP
-    P = plant["P"] * (1 - Qreb/plant["Qwaste"])     # assuming live steam is used for reboiler
+    P = plant["P"] * (1 - Qreb/plant["Qwaste"])      # assuming live steam is used for reboiler
     P = P - Pcapture - Pcondition
     Qdh = plant["Qdh"] * (1 - Qreb/plant["Qwaste"])
 
     # recover heat up to 100 % of original DH - use whatever power is available for HP
-    Qhex = 0.64 * Qreb                              #[MW] [Beiron, 2022]
+    Qhex = 0.64 * Qreb                               # [MW] [Beiron, 2022]
     Qdiff = plant["Qdh"] - (Qdh + Qhex)
     if Qdiff < 0:
         raise ValueError
@@ -98,51 +148,201 @@ def plan_CCS(plant, x, transport_costs):
             Whp = P
     Qdh = Qdh + Qhex + Whp*x["COP"]
     P -= Whp
-    Ppenalty = (plant["P"] - P) * plant["FLH"]      #[MWh/yr]
-    Qpenalty = (plant["Qdh"] - Qdh) * plant["FLH"]  #[MWh/yr]
+    Ppenalty = (plant["P"] - P) * x["FLH"]           # [MWh/yr]
+    Qpenalty = (plant["Qdh"] - Qdh) * x["FLH"]       # [MWh/yr]
 
     # Estimate CAPEX
-    CAPEX, annualized_CAPEX, levelized_CAPEX = estimate_CAPEX(mcaptured, x)
-    print("CAPEX =", CAPEX) #[kEUR]
-    print(levelized_CAPEX*1000) #[kEUR/t] -> [EUR/t]
+    CAPEX, annualized_CAPEX, levelized_CAPEX = estimate_CAPEX(mcaptured, x)  # [kEUR, kEUR/yr, kEUR/t]
 
-    # Example of using transport costs (you can modify this based on your needs)
-    distance = 300  # km - this should come from your actual data
-    transport_cost = transport_costs['optimist_1Mt'](distance)  # EUR/t
+    # Calculate transport cost using sea distance
+    distance = sea_distance(plant["hub"], x["destination"], sea_distances)  # [km]
+    print("<<< Missing Truck/Rail/Harbor costs >>>")
+    print(plant["hub"], x["destination"])
+    
+    hub_value = x[plant["hub"].lower()]              # Get the value (1, 2, or 3) for this hub
+    scenario = f"{hub_value}Mt"                      # Convert to scenario name (1Mt, 2Mt, or 3Mt)
+    
+    scenario_type = "optimist" if x["optimism"] else "pessimist"
+    scenario_key = f"{scenario_type}_{scenario}"
+    print(scenario_key)
+    
+    transport_cost = transport_costs[scenario_key].predict([[distance]])[0]  # [EUR/t]
     print(f"Transport cost at {distance} km: {transport_cost:.2f} EUR/t")
 
-    FCCS = 1
-    BECCS = 1
-    bid = 2
-    Ppenalty = 3
-    Qpenalty = 4
+    # Estimate OPEX
+    OPEXfix = (CAPEX*1000 * x["OPEXfix"]) / (mcaptured/1000*3600 * x["FLH"])  # [EUR/t]
+    OPEXmakeup = x["makeup"] * x["camine"]                                    # [EUR/t]
+    OPEXenergy = (Ppenalty*x["celc"] + Qpenalty*x["celc"]*x["cheat"]) / (mcaptured/1000*3600 * x["FLH"])  # [EUR/t]
+    OPEX = OPEXfix + OPEXmakeup + OPEXenergy                                  # [EUR/t]
+
+    # Construct a reversed auction bid
+    CAC = levelized_CAPEX*1000 + OPEX + transport_cost                        # [EUR/t]
+    fossil = plant["Fossil"] / plant["Total"]                                 # [tfossil/t] share of fossil CO2
+    biogenic = 1 - fossil                                                     # [tbiogenic/t] share of biogenic CO2
+    incentives = fossil * x["ETS"] + biogenic * x["CRC"]                      # [EUR/t]
+  
+    bid = CAC - incentives                                                     # [EUR/t]
+
+    FCCS = plant["Fossil"] * 0.90                                             # [ktCO2/yr]
+    BECCS = plant["Biogenic"] * 0.90                                          # [ktCO2/yr]
+
     return FCCS, BECCS, bid, Ppenalty, Qpenalty
+
+def plot_transport_costs(transport_costs, r2_scores, df, show_plot=False, max_distance=3000):
+    """
+    Plot transport costs with linear regression fits.
+    
+    Args:
+        transport_costs (dict): Dictionary of linear regression models
+        r2_scores (dict): Dictionary of R² scores for each model
+        df (pd.DataFrame): Original data
+        show_plot (bool): Whether to display the plot
+        max_distance (float): Maximum distance to show in the plot [km]
+    
+    Returns:
+        tuple: (fig, ax) matplotlib figure and axis objects
+    """
+    # Create distance range for x-axis
+    distances = np.linspace(0, max_distance, 100)
+    
+    # Create figure and axis
+    fig, ax = plt.subplots(figsize=(12, 6))
+    
+    # Plot each scenario
+    scenarios = ['1Mt', '2Mt', '3Mt']
+    colors = ['blue', 'green', 'red']
+    
+    for i, scenario in enumerate(scenarios):
+        # Plot data points
+        ax.scatter(df['distance'], df[f'optimist_{scenario}'], 
+                  color=colors[i], marker='o', alpha=0.3, label=f'{scenario} - Optimistic (data)')
+        ax.scatter(df['distance'], df[f'pessimist_{scenario}'], 
+                  color=colors[i], marker='s', alpha=0.3, label=f'{scenario} - Pessimistic (data)')
+        
+        # Plot regression lines
+        ax.plot(distances, transport_costs[f'optimist_{scenario}'].predict(distances.reshape(-1, 1)), 
+               color=colors[i], linestyle='-', 
+               label=f'{scenario} - Optimistic (R²={r2_scores[f"optimist_{scenario}"]:.3f})')
+        ax.plot(distances, transport_costs[f'pessimist_{scenario}'].predict(distances.reshape(-1, 1)), 
+               color=colors[i], linestyle='--', 
+               label=f'{scenario} - Pessimistic (R²={r2_scores[f"pessimist_{scenario}"]:.3f})')
+    
+    ax.set_xlabel('Distance [km]')
+    ax.set_ylabel('Transport Cost [EUR/t]')
+    ax.set_title(f'Transport Costs vs Distance for Different Scenarios\nwith Linear Regression Fits (extended to {max_distance} km)')
+    ax.grid(True, linestyle='--', alpha=0.7)
+    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    
+    # Add a note about the regression line extension
+    fig.text(0.02, 0.02, 'Note: Regression lines extend beyond the data range and can be used for predictions at any distance', 
+             fontsize=8, style='italic')
+    
+    plt.tight_layout()
+    
+    if show_plot:
+        plt.show()
+    
+    return fig, ax
+
+def haversine_distance(lat1, lon1, lat2, lon2):
+    """
+    Calculate the great circle distance between two points on the earth (specified in decimal degrees)
+    
+    Args:
+        lat1, lon1: Latitude and longitude of first point
+        lat2, lon2: Latitude and longitude of second point
+    
+    Returns:
+        float: Distance in kilometers
+    """
+    # Convert decimal degrees to radians
+    lat1, lon1, lat2, lon2 = map(np.radians, [lat1, lon1, lat2, lon2])
+    
+    # Haversine formula
+    dlon = lon2 - lon1
+    dlat = lat2 - lat1
+    a = np.sin(dlat/2)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon/2)**2
+    c = 2 * np.arcsin(np.sqrt(a))
+    r = 6371  # Radius of earth in kilometers
+    
+    return c * r
+
+def assign_hub(plants_df):
+    """
+    Assign each plant to its nearest hub based on geographical coordinates.
+    
+    Args:
+        plants_df (pd.DataFrame): DataFrame containing plant information with 'Latitude' and 'Longitude' columns
+    
+    Returns:
+        pd.DataFrame: Updated plants DataFrame with new 'hub' column
+    """
+    # Read hubs data
+    hubs_df = pd.read_csv("data/hubs.csv")
+    
+    # Create a copy of the plants DataFrame to avoid modifying the original
+    plants = plants_df.copy()
+    
+    # Initialize hub column
+    plants['hub'] = None
+    plants['distance_to_hub'] = np.inf
+    
+    # For each plant, find the nearest hub
+    for idx, plant in plants.iterrows():
+        min_distance = np.inf
+        nearest_hub = None
+        
+        for _, hub in hubs_df.iterrows():
+            distance = haversine_distance(
+                plant['Latitude'], plant['Longitude'],
+                hub['lat'], hub['lon']
+            )
+            
+            if distance < min_distance:
+                min_distance = distance
+                nearest_hub = hub['hub']
+        
+        plants.at[idx, 'hub'] = nearest_hub
+        plants.at[idx, 'distance_to_hub'] = min_distance
+    
+    return plants
 
 def WACCUS_EPR( 
     # uncertainties
     mpackaging = 1,
     mbuildings = 1,
-    mKN39 = 884393,     #[t/a] plastic products mappable under KN39 [IVL]
-    mtotal = 11000000,  #[t/a] estimated as total-incinterated (including imports) [Naturvardsverket]
+    mKN39 = 884393,     # [t/a] plastic products mappable under KN39 [IVL]
+    mtotal = 11000000,  # [t/a] estimated as total-incinterated (including imports) [Naturvardsverket]
 
-    recyclable = 0.15,  #[-] fraction of simple products possible to recycle mechanically
+    recyclable = 0.15,  # [-] fraction of simple products possible to recycle mechanically
     pproducts = 2,
-    pKN39 = 46000,      #[SEK/tpl] [IVL]
+    pKN39 = 46000,      # [SEK/tpl] [IVL]
 
-    LHV = 11,           #[MJ/kgf] [Hammar]
-    vfluegas = 4.7,     #[Nm3/kgf]
-    Ccontent = 0.298,   #[kgC/kgf]
-    fossil = 0.40,      #[-]
-    qreb = 3.5,         #[MJ/kgCO2]
+    LHV = 11,           # [MJ/kgf] [Hammar]
+    vfluegas = 4.7,     # [Nm3/kgf]
+    Ccontent = 0.298,   # [kgC/kgf]
+    fossil = 0.40,      # [-] NOTE: assumption not needed: emissions data is available and used
+    qreb = 3.5,         # [MJ/kgCO2]
     COP = 3,
 
     FLH = 8000,
     dr = 0.075,
     t = 25,
-    FOAK = 0.45/2,        #[-] [Beiron, 2024] applies to CO2 capture and conditioning 
+    FOAK = 0.45/2,      # [-] [Beiron, 2024] applies to CO2 capture and conditioning 
+    OPEXfix = 0.05,     # [-] [Beiron, 2024] % of CAPEX 
+    camine = 2000,      # [EUR/m3] [Beiron, 2024]
+    celc = 60,          # [EUR/MWh]
+    cheat = 0.80,       # [% of elc]
+    CRC = 100,          # [EUR/tCO2]
+    ETS = 80,           # [EUR/tCO2]
 
-    RENOVA = ["FOAK", "NOAK"],
-    HANDELO = ["FOAK", "NOAK"], # etc. ... matters most!
+    lulea = 1,          # [1,2,3]
+    sundsvall = 1,      # [1,2,3]
+    stockholm = 1,      # [1,2,3]
+    malmo = 1,          # [1,2,3]
+    gothenburg = 1,     # [1,2,3]
+    optimism = False,   # [True, False]
+    destination = "oygarden",  # ["oygarden", "kalundborg"]
 
     # levers 
     tax = [800,1600,2400,3200],
@@ -150,11 +350,16 @@ def WACCUS_EPR(
 
     # constants
     plants = None,
-    case = ["CCUS"],         #["CCUS", "CCU", "CCS"] conduct analysis separately for the three cases
-    k = 0.6857,             #[-] [Stenström, 2025]
-    CAPEX_ref = 3715 * 87,  # [MNOK] -> [kEUR] NOTE: can pick other CAPEX from source:[Gassnova, Demonstrasjon av Fullskala CO2-Håndtering - Rapport for Avsluttet Forprosjekt]
+    case = ["CCUS"],    # ["CCUS", "CCU", "CCS"] conduct analysis separately for the three cases
+    k = 0.6857,         # [-] [Stenström, 2025]
+    CAPEX_ref = 3715 * 87,  # [MNOK] -> [kEUR] NOTE: can pick other CELSIO CAPEX from source:[Gassnova, Demonstrasjon av Fullskala CO2-Håndtering - Rapport for Avsluttet Forprosjekt]
     captured_ref = 400,     # [ktCO2/yr]
     transport_costs = None,  # Dictionary of transport cost interpolation functions
+    sea_distances = None,    # Dictionary of pre-calculated sea distances
+
+    # Global assumptions
+    SEK_TO_EUR = 0.091,     # [EUR/SEK] Exchange rate
+    makeup = 0.584/1000,    # [m3/tCO2] [Kumar, 2023]
 ):
     x = {
         "mpackaging": mpackaging,
@@ -164,39 +369,59 @@ def WACCUS_EPR(
         "recyclable": recyclable,
         "pproducts": pproducts,
         "pKN39": pKN39,
+        
         "LHV": LHV,
         "vfluegas": vfluegas,
         "Ccontent": Ccontent,
         "fossil": fossil,
         "qreb": qreb,
         "COP": COP,
+
         "FLH": FLH,
         "dr": dr,
         "t": t,
         "FOAK": FOAK,
+        "OPEXfix": OPEXfix,
+        "camine": camine,
+        "celc": celc,
+        "cheat": cheat,
+        "CRC": CRC,
+        "ETS": ETS,
+
         "tax": tax,
         "groups": groups,
         "k": k,
         "CAPEX_ref": CAPEX_ref,
         "captured_ref": captured_ref,
+
+        "lulea": lulea,
+        "sundsvall": sundsvall,
+        "stockholm": stockholm,
+        "malmo": malmo,
+        "gothenburg": gothenburg,
+        "optimism": optimism,
+        "destination": destination,  # Now passing destination name instead of coordinates
+        "makeup": makeup,
     }
 
     # RQ1: tax revenues
 
     # RQ2: subsidy costs
     if case == "CCUS":
-        CCU_names = ["Händelöverket"]
-        CCS_names = ["Renova"]
+        CCU_names = ["Handeloverket"]
+        CCS_names = ["Renova","Handeloverket"]
     elif case == "CCU":
-        CCU_names = ["Name1", "Name2", "Name3", "Name4", "Name5", "Name6"]
+        CCU_names = ["All"]
         CCS_names = None
     elif case == "CCS":
         CCU_names = None
-        CCS_names = ["Name1", "Name2", "Name3", "Name4", "Name5", "Name6"]
+        CCS_names = ["All"]
 
     for _, plant in plants.iterrows():
         if plant["Name"] in CCS_names:
-            FCCS, BECCS, bid, Ppenalty, Qpenalty = plan_CCS(plant, x, transport_costs)
+            FCCS, BECCS, bid, Ppenalty, Qpenalty = plan_CCS(plant, x, transport_costs, sea_distances)
+            print(plant["Name"], " : ",FCCS, BECCS, bid, Ppenalty, Qpenalty)
+
         if plant["Name"] in CCU_names:
             CCU, bid, Ppenalty, Qpenalty = plan_CCU(plant)
 
@@ -218,37 +443,24 @@ if __name__ == "__main__":
     y = np.log(df["CAPEX"] / CAPEX_ref)
     model = LinearRegression().fit(x.values.reshape(-1, 1), y.values)
     k = model.coef_[0]
-
-    print(f"\nFitted model: CAPEX ≈ {CAPEX_ref:.2f} * (captured / {captured_ref:,.0f})^{k:.4f}")
     
-    # Compare with Celsio case
-    celsio_captured = 400  # ktCO2/yr
-    celsio_reported_capex_mnok = 3715  # MNOK
-    celsio_reported_capex_keur = celsio_reported_capex_mnok * 87  # Convert MNOK to kEUR
-    model_predicted_capex = CAPEX_ref * (celsio_captured / captured_ref) ** k
+    # Get sea transport cost functions and sea distances
+    SEK_TO_EUR = 0.091  # [EUR/SEK] Exchange rate
+    transport_costs, r2_scores, df = cost_transport()
+    sea_distances = precalculate_sea_distances()
+    fig, ax = plot_transport_costs(transport_costs, r2_scores, df, show_plot=False)
     
-    print("\nModel Validation against Celsio case:")
-    print(f"Celsio waste-CCS (FOV) has reported CAPEX of {celsio_reported_capex_mnok} MNOK ({celsio_reported_capex_keur:.0f} kEUR) @{celsio_captured} ktCO2/yr")
-    print(f"Model predicts: {model_predicted_capex:.2f} kEUR")
-    print(f"Difference: {((model_predicted_capex - celsio_reported_capex_keur) / celsio_reported_capex_keur * 100):.1f}%")
-    print(" -> Demonstrasjon av Fullskala CO2-Håndtering - Rapport for Avsluttet Forprosjekt\n")
-    print("Use this^ to estimate CAPEX (includes C&L) - then add energy OPEX etc.!")
-    
-    # Get transport cost interpolation functions
-    transport_costs = cost_transport()
-    
-    # Example usage of transport cost functions
-    test_distance = 1500  # km
-    print("\nTransport Cost Example:")
-    print(f"Transport costs at {test_distance} km distance:")
-    print(f"1Mt scenario - Optimistic: {transport_costs['optimist_1Mt'](test_distance):.2f} EUR/t, Pessimistic: {transport_costs['pessimist_1Mt'](test_distance):.2f} EUR/t")
-    print(f"2Mt scenario - Optimistic: {transport_costs['optimist_2Mt'](test_distance):.2f} EUR/t, Pessimistic: {transport_costs['pessimist_2Mt'](test_distance):.2f} EUR/t")
-    print(f"3Mt scenario - Optimistic: {transport_costs['optimist_3Mt'](test_distance):.2f} EUR/t, Pessimistic: {transport_costs['pessimist_3Mt'](test_distance):.2f} EUR/t")
-    
-    # reading data from the present study and running EPR function
+    # reading plant data and assign these to transport hubs
     plants = pd.read_csv("data/plants.csv")
-    output = WACCUS_EPR(plants=plants, k=k, case="CCUS", transport_costs=transport_costs)
+    plants = assign_hub(plants)
+    print("\nPlant to Hub Assignments:")
+    print(plants[['Name', 'hub', 'distance_to_hub']].to_string())
+    
+    output = WACCUS_EPR(
+        plants=plants, 
+        k=k, 
+        case="CCUS", 
+        transport_costs=transport_costs,
+        sea_distances=sea_distances  # Pass pre-calculated distances dict
+    )
 
-    print("TODO: T&S costs are implemented, but the CHP plants do not have a distance, port, and destination yet!")
-    print("TODO: Also, the 1Mt, 2Mt, 3Mt scenarios are not implemented yet! Also the optimistic and pessimistic scenarios are not implemented yet!")
-    print("\n---- Conclusions ----")

@@ -1,3 +1,11 @@
-Name,City,Latitude,Longitude,Biogenic,Fossil,Total,Qwaste,Qdh,P,Qfgc,FLH,Estimated,Comment
-Händelöverket,Norrköping,58.621,16.232,355,256,611,160,120,40,28,7884,450.8157207,"1 waste-fired + 1 biomass-fired CHP boilers on site, 160 + 289 MW thermal, 28MWfgc is new"
-Renova,Göteborg,57.732,12.053,321,223,544,171,126,45,38,7884,481.8093015,"Boiler: 171 MW thermal"
+Name,City,Latitude,Longitude,Biogenic,Fossil,Total,Qwaste,Qdh,P,Qfgc,Comment
+Renova,Goteborg,57.732,12.053,321,223,544,171,126,45,38,Boiler: 171 MW thermal
+SAKAB,Kumla,59.1167,15.1333,23.693,111.219,134.912,41,35,6,9,Boiler: 41 MW thermal
+Filbornaverket,Helsingborg,56.0675,12.7367,121.629,92.074,213.703,69,52,17,20,Boiler: 69 MW thermal
+Garstadverket,Linkoping,58.437,15.655,321.136,278.302,599.438,175,135,40,38.5,"2 waste-fired CHP boilers on site, 81 + 94 MW thermal"
+Sjolunda,Malmo,55.6167,13.0333,302.959,282.788,585.747,170,130,40,6,"2 waste-fired CHP boilers on site, 85 + 85 MW thermal"
+Handeloverket,Norrkoping,58.621,16.232,355.286,255.673,610.959,160,120,40,28,"1 waste-fired + 1 biomass-fired CHP boilers on site, 160 + 289 MW thermal, 28MWfgc is new"
+Bristaverket,Stockholm,59.615,17.873,325,93,418,74,57,17,12,"1 waste-fired + 1 biomass-fired CHP boilers on site, 74 + 116 MW thermal"
+Vasteras KVV,Vasteras,59.588,16.514,783,158,941,158,110,48,30,"1 waste-fired + 2 biomass-fired CHP boilers on site, 158 + 150 + 170 MW thermal"
+Hogdalenverket,Stockholm,59.2565,18.0614,471,325,795,257,186,71,36,"1 waste-fired + 1 biomass-fired CHP boilers on site, 98 + 159 MW thermal"
+Bolanderna,Uppsala,59.8533,17.6747,205,156,361,139,139,10,29,Several smaller boilers to common stack (ref: Bolanderna Uppsala MSc thesis)
