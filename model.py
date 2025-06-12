@@ -336,11 +336,11 @@ def WACCUS_EPR(
     CRC = 100,          # [EUR/tCO2]
     ETS = 80,           # [EUR/tCO2]
 
-    lulea = 1,          # [1,2,3]
-    sundsvall = 1,      # [1,2,3]
-    stockholm = 1,      # [1,2,3]
-    malmo = 1,          # [1,2,3]
-    gothenburg = 1,     # [1,2,3]
+    lulea = 1,          # [1,2,3] [Mt/yr]
+    sundsvall = 1,      # [1,2,3] [Mt/yr]
+    stockholm = 1,      # [1,2,3] [Mt/yr]
+    malmo = 1,          # [1,2,3] [Mt/yr]
+    gothenburg = 1,     # [1,2,3] [Mt/yr]
     optimism = False,   # [True, False]
     destination = "oygarden",  # ["oygarden", "kalundborg"]
 
@@ -409,7 +409,7 @@ def WACCUS_EPR(
     # RQ2: subsidy costs
     if case == "CCUS":
         CCU_names = ["Handeloverket"]
-        CCS_names = ["Renova","Handeloverket"]
+        CCS_names = ["Renova","SAKAB","Filbornaverket","Garstadverket","Sjolunda","Handeloverket","Bristaverket","Bolanderna"]
     elif case == "CCU":
         CCU_names = ["All"]
         CCS_names = None
@@ -456,6 +456,7 @@ if __name__ == "__main__":
     print("\nPlant to Hub Assignments:")
     print(plants[['Name', 'hub', 'distance_to_hub']].to_string())
     
+    # Run the model
     output = WACCUS_EPR(
         plants=plants, 
         k=k, 
