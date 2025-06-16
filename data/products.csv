@@ -1,0 +1,5 @@
+name,weight per unit [kg],fossil carbon content [mass%],price per unit [EUR],unit,scientific references,web references,tax_amount [EUR],price_increase_percent [%]
+food tray (black),0.016,75,0.59,piece,https://doi.org/10.3390/su11195324,https://se.duni.com/en/Duniform-sealable-packaging/Sealable-food-containers/c/81268,0.11,18.6
+car door panel,3.7,85,40,piece,https://link.springer.com/article/10.1065/lca2005.05.207,https://www.amazon.se/-/en/b?ie=UTF8&node=20640233031&utm_source,25.31,63.3
+tetra pak (oat milk),0.05,22,2,piece,https://onlinelibrary.wiley.com/doi/full/10.1002/pts.2235,https://handla.ica.se/varumarke/OATLY,0.20,10.0
+wet wipes,0.68,62,3.84,piece,https://www.sciencedirect.com/science/article/pii/S0921344921004122?casa_token=nBpsJiGA5EsAAAAA:c7JR_UByyTttl908czn-ktAb7EbQZUUA12lxtxMYfGxh1mdj0U1GmXvl-o8GBww78Yze0pNihg,3.46,90.1

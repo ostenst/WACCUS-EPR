@@ -575,7 +575,6 @@ def plan_CCU(plant, x, plot_single=False):
     # burn fuel
     mfuel = plant["Qwaste"] / (x["LHV"]/3600) /3600  # [kgf/s]
     mCO2 = mfuel* x["Ccontent"] * 44/12              # [kgCO2/s]
-    Vfluegas = x["vfluegas"] * mfuel                 # [Nm3/s]
 
     # capture and compress CO2
     mcaptured = mCO2 * 0.90                          # [kgCO2/s]
@@ -721,7 +720,6 @@ def plan_CCS(plant, x, transport_costs, sea_distances):
     # burn fuel
     mfuel = plant["Qwaste"] / (x["LHV"]/3600) /3600  # [kgf/s]
     mCO2 = mfuel* x["Ccontent"] * 44/12              # [kgCO2/s]
-    Vfluegas = x["vfluegas"] * mfuel                 # [Nm3/s]
 
     # capture and condition CO2
     mcaptured = mCO2 * 0.90                          # [kgCO2/s]
@@ -971,14 +969,108 @@ def get_property_at_temp(thermo_props, gas, T, property_name):
     # Use numpy's interpolation
     return np.interp(T, thermo_props[gas]['temperatures'], thermo_props[gas][property_name])
 
+def plot_awarded_metrics(output):
+    """
+    Create a bar plot of awarded metrics with two y-axes.
+    
+    Args:
+        output (dict): Dictionary containing the awarded metrics
+    """
+    # Create figure and axis with two y-axes
+    fig, ax1 = plt.subplots(figsize=(12, 6))
+    ax2 = ax1.twinx()
+    
+    # Data for plotting
+    metrics = ['FCCS+BECCS', 'CCU', 'Ppenalty', 'Qpenalty', 'Qmethanol']
+    values = [output['total_FCCS_BECCS'], output['total_CCU'], 
+              output['total_Ppenalty'], output['total_Qpenalty'], 
+              output['total_Qmethanol']]
+    
+    # Colors for bars
+    colors = ['#1f77b4', '#2ca9b8', '#d62728', '#ff7f0e', '#9467bd']
+    
+    # Create bars
+    bars = ax1.bar(metrics, values, color=colors)
+    
+    # Set labels and title
+    ax1.set_xlabel('Metrics')
+    ax1.set_ylabel('CO2 [ktCO2/yr]', color='#1f77b4')
+    ax2.set_ylabel('Energy [GWh/yr]', color='#d62728')
+    plt.title('Awarded Metrics Summary')
+    
+    # Set y-axis limits and colors
+    ax1.tick_params(axis='y', labelcolor='#1f77b4')
+    ax2.tick_params(axis='y', labelcolor='#d62728')
+    
+    # Add value labels on top of bars
+    for bar in bars:
+        height = bar.get_height()
+        ax1.text(bar.get_x() + bar.get_width()/2., height,
+                f'{height:.1f}',
+                ha='center', va='bottom')
+    
+    # Add grid
+    ax1.grid(True, linestyle='--', alpha=0.3)
+    
+    # Adjust layout
+    plt.tight_layout()
+    
+    # Save figure
+    plt.savefig('awarded_metrics.png', dpi=600, bbox_inches='tight')
+    
+    return fig
+
+def plot_product_increases(products_df):
+    """
+    Create a bar plot of product price increases.
+    
+    Args:
+        products_df (pd.DataFrame): DataFrame containing product information
+    """
+    # Create figure and axis
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    # Sort products by price increase percentage
+    sorted_df = products_df.sort_values('price_increase_percent', ascending=False)
+    
+    # Create bars
+    bars = ax.bar(sorted_df['name'], sorted_df['price_increase_percent'], 
+                 color='#2ca9b8')
+    
+    # Set labels and title
+    ax.set_xlabel('Products')
+    ax.set_ylabel('Price Increase [%]')
+    plt.title('Product Price Increases Due to Carbon Tax')
+    
+    # Rotate x-axis labels for better readability
+    plt.xticks(rotation=45, ha='right')
+    
+    # Add value labels on top of bars
+    for bar in bars:
+        height = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width()/2., height,
+                f'{height:.1f}%',
+                ha='center', va='bottom')
+    
+    # Add grid
+    ax.grid(True, linestyle='--', alpha=0.3)
+    
+    # Adjust layout to prevent label cutoff
+    plt.tight_layout()
+    
+    # Save figure
+    plt.savefig('product_increases.png', dpi=600, bbox_inches='tight')
+    
+    return fig
+
 def WACCUS_EPR( 
     # uncertainties
     mKN39 = 884393,     # [t/a] plastic products mappable under KN39 [IVL]
     pKN39 = 46000,      # [SEK/tpl] [IVL]
     recyclable = 0.15,  # [-] fraction of simple products possible to recycle mechanically
+    fraction = 0.75,    # [-] fraction of carbon in plastic [Isabel]
 
     LHV = 11,           # [MJ/kgf] [Hammar]
-    vfluegas = 4.7,     # [Nm3/kgf]
     Ccontent = 0.298,   # [kgC/kgf]
     fossil = 0.40,      # [-] NOTE: assumption not needed: emissions data is available and used
     qreb = 3.5,         # [MJ/kgCO2]
@@ -1005,8 +1097,7 @@ def WACCUS_EPR(
     destination = "oygarden",  # ["oygarden", "kalundborg"]
 
     # levers 
-    tax = [800,1600,2400,3200],
-    groups = [0,1,2,3],
+    tax = 200,          # [EUR/tCO2]
 
     # constants
     plants = None,
@@ -1018,7 +1109,6 @@ def WACCUS_EPR(
     sea_distances = None,    # Dictionary of pre-calculated sea distances
     thermo_props = None,     # Dictionary of thermodynamic properties
 
-    # Global assumptions
     SEK_TO_EUR = 0.091,     # [EUR/SEK] Exchange rate
     makeup = 0.584/1000,    # [m3/tCO2] [Kumar, 2023]
     etais = 0.80,           # [-]
@@ -1027,9 +1117,9 @@ def WACCUS_EPR(
         "mKN39": mKN39,
         "recyclable": recyclable,
         "pKN39": pKN39,
+        "fraction": fraction,
         
         "LHV": LHV,
-        "vfluegas": vfluegas,
         "Ccontent": Ccontent,
         "fossil": fossil,
         "qreb": qreb,
@@ -1048,7 +1138,6 @@ def WACCUS_EPR(
         "pmethanol": pmethanol,
 
         "tax": tax,
-        "groups": groups,
         "k": k,
         "CAPEX_ref": CAPEX_ref,
         "captured_ref": captured_ref,
@@ -1066,6 +1155,17 @@ def WACCUS_EPR(
     }
 
     # RQ1: tax revenues
+    mass_taxed = mKN39 * (1 - recyclable) * fraction # [tC/yr]
+    mass_CO2 = mass_taxed * 3.66 # [tCO2/yr]
+    fund = mass_CO2 * tax # [EUR/yr]
+    fund /= 10**6 # [MEUR/yr]
+
+    products_df = pd.read_csv("data/products.csv")
+    products_df['tax_amount'] = products_df['weight per unit [kg]']/1000 * (products_df['fossil carbon content [mass%]']/100) * 3.66 * tax  # [EUR]
+    products_df['price_increase_percent'] = (products_df['tax_amount'] / products_df['price per unit [EUR]']) * 100  # [%]
+    
+    print("\nProduct Price Increases:")
+    print(products_df[['name', 'price per unit [EUR]', 'tax_amount', 'price_increase_percent']].to_string())
 
     # RQ2: subsidy costs
     if case == "CCUS":
@@ -1078,24 +1178,120 @@ def WACCUS_EPR(
         CCU_names = []
         CCS_names = ["Renova","SAKAB","Filbornaverket","Garstadverket","Sjolunda","Handeloverket","Bristaverket","Vasteras KVV","Hogdalenverket","Bolanderna"]
 
+    # Collect all bids
+    bids = []
     for _, plant in plants.iterrows():
         if plant["Name"] in CCS_names:
             FCCS, BECCS, bid, Ppenalty, Qpenalty = plan_CCS(plant, x, transport_costs, sea_distances)
-            print(f"{'Plant Name':<20} {'FCCS':>10} {'BECCS':>10} {'Bid':>10} {'P Penalty':>12} {'Q Penalty':>12}")
-            print(f"{plant['Name']:<20} {FCCS:>10.2f} {BECCS:>10.2f} {bid:>10.2f} {Ppenalty:>12.2f} {Qpenalty:>12.2f}")
+            bids.append({
+                'name': plant['Name'],
+                'type': 'CCS',
+                'bid': bid,
+                'FCCS': FCCS,
+                'BECCS': BECCS,
+                'Ppenalty': Ppenalty,
+                'Qpenalty': Qpenalty
+            })
 
         if plant["Name"] in CCU_names:
             CCU, bid, Ppenalty, Qpenalty, Qmethanol = plan_CCU(plant, x)
-            print(f"{'Plant Name':<20} {'CCU':>10} {'Bid':>10} {'P Penalty':>12} {'Q Penalty':>12} {'Q Methanol':>12}")
-            print(f"{plant['Name']:<20} {CCU:>10.2f} {bid:>10.2f} {Ppenalty:>12.2f} {Qpenalty:>12.2f} {Qmethanol:>12.2f}")
+            bids.append({
+                'name': plant['Name'],
+                'type': 'CCU',
+                'bid': bid,
+                'CCU': CCU,
+                'Ppenalty': Ppenalty,
+                'Qpenalty': Qpenalty,
+                'Qmethanol': Qmethanol
+            })
 
-    # RQ2: reversed auction simulation
-    # NOTE: need to add a check for bid < 0
+    # Sort bids by bid amount (ascending)
+    bids.sort(key=lambda x: x['bid'])
 
-    # RQ3: product cost increases
-    # KN39, cheese, syringe, panel, cable, tire, pedal 
+    # Initialize results
+    remaining_fund = fund
+    awarded_plants = []
 
-    output = 1
+    print("\nAuction Results:")
+    print(f"{'Plant Name':<20} {'Type':<6} {'Bid':>10} {'Awarded':>12} {'Remaining Fund':>15}")
+    print("-" * 70)
+
+    # Distribute funds
+    for bid in bids:
+        if bid['type'] == 'CCS':
+            requested_amount = bid['bid'] * (bid['FCCS'] + bid['BECCS']) * 1000 /(10**6) # [EUR/tCO2 * ktCO2/yr => MEUR/yr]
+            awarded = requested_amount <= remaining_fund
+            if awarded:
+                remaining_fund -= requested_amount
+            awarded_plants.append({
+                'name': bid['name'],
+                'type': bid['type'],
+                'awarded': awarded,
+                'bid': bid['bid'],
+                'FCCS': bid['FCCS'],
+                'BECCS': bid['BECCS'],
+                'FCCS+BECCS': bid['FCCS'] + bid['BECCS'],
+                'Ppenalty': bid['Ppenalty'],
+                'Qpenalty': bid['Qpenalty'],
+                'CCU': 0,
+                'Qmethanol': 0,
+                'amount': requested_amount if awarded else 0
+            })
+        else:  # CCU
+            requested_amount = bid['bid'] * bid['CCU'] * 1000 /(10**6)
+            awarded = requested_amount <= remaining_fund
+            if awarded:
+                remaining_fund -= requested_amount
+            awarded_plants.append({
+                'name': bid['name'],
+                'type': bid['type'],
+                'awarded': awarded,
+                'bid': bid['bid'],
+                'FCCS': 0,
+                'BECCS': 0,
+                'FCCS+BECCS': 0,
+                'Ppenalty': bid['Ppenalty'],
+                'Qpenalty': bid['Qpenalty'],
+                'CCU': bid['CCU'],
+                'Qmethanol': bid['Qmethanol'],
+                'amount': requested_amount if awarded else 0
+            })
+
+        print(f"{bid['name']:<20} {bid['type']:<6} {bid['bid']:>10.2f} {requested_amount:>12.2f} {remaining_fund:>15.2f}")
+
+    print("\nSummary:")
+    print(f"Total fund: {fund:.2f} MEUR/yr")
+    print(f"Remaining fund: {remaining_fund:.2f} MEUR/yr")
+    print(f"Number of plants awarded: {len([p for p in awarded_plants if p['awarded']])}")
+    print("\nAwarded plants:")
+    print(f"{'Plant Name':<20} {'Type':<6} {'Awarded':<6} {'[EUR/t]':>10} {'[MEUR/yr]':>10} {'FCCS':>10} {'BECCS':>10} {'FCCS+BECCS':>12} {'CCU':>10} {'Ppenalty':>12} {'Qpenalty':>12} {'Qmethanol':>12}")
+    print("-" * 140)
+    for plant in awarded_plants:
+        print(f"{plant['name']:<20} {plant['type']:<6} {str(plant['awarded']):<6} {plant['bid']:>10.2f} {plant['amount']:>10.2f} {plant['FCCS']:>10.2f} {plant['BECCS']:>10.2f} {plant['FCCS+BECCS']:>12.2f} {plant['CCU']:>10.2f} {plant['Ppenalty']:>12.2f} {plant['Qpenalty']:>12.2f} {plant['Qmethanol']:>12.2f}")
+
+    # Calculate sums of awarded metrics
+    total_FCCS_BECCS = sum(plant['FCCS+BECCS'] for plant in awarded_plants if plant['awarded'])
+    total_CCU = sum(plant['CCU'] for plant in awarded_plants if plant['awarded'])
+    total_Ppenalty = sum(plant['Ppenalty'] for plant in awarded_plants if plant['awarded'])
+    total_Qpenalty = sum(plant['Qpenalty'] for plant in awarded_plants if plant['awarded'])
+    total_Qmethanol = sum(plant['Qmethanol'] for plant in awarded_plants if plant['awarded'])
+
+    print("\nTotal awarded metrics:")
+    print(f"FCCS+BECCS: {total_FCCS_BECCS:.2f} ktCO2/yr")
+    print(f"CCU: {total_CCU:.2f} ktCO2/yr")
+    print(f"Ppenalty: {total_Ppenalty:.2f} GWh/yr")
+    print(f"Qpenalty: {total_Qpenalty:.2f} GWh/yr")
+    print(f"Qmethanol: {total_Qmethanol:.2f} GWh/yr")
+
+    output = {
+        'total_FCCS_BECCS': total_FCCS_BECCS,
+        'total_CCU': total_CCU,
+        'total_Ppenalty': total_Ppenalty,
+        'total_Qpenalty': total_Qpenalty,
+        'total_Qmethanol': total_Qmethanol,
+        'remaining_fund': remaining_fund,
+        'product_increases': products_df[['name', 'price per unit [EUR]', 'tax_amount', 'price_increase_percent']].to_dict('records')
+    }
     return output
 
 if __name__ == "__main__":
@@ -1132,7 +1328,12 @@ if __name__ == "__main__":
         thermo_props=thermo_props     # Pass thermodynamic properties
     )
     
+    # Create and save the plots
+    fig1 = plot_awarded_metrics(output)
+    fig2 = plot_product_increases(pd.DataFrame(output['product_increases']))
+    
     print("Most CCU plants are near profitable already - consider adding higher electrolyzer costs etc., also no ETS incentive?")
     print("I should verify the methanol production - is it reasonable really?")
+    print("Let's start with CCS cases and auctions then!")
     plt.show()
 
