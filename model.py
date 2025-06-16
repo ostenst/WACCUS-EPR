@@ -749,22 +749,22 @@ def plan_CCS(plant, x, transport_costs, sea_distances):
     Qpenalty = (plant["Qdh"] - Qdh) * x["FLH"] /1000 # [GWh/yr]
 
     # Estimate CAPEX
-    CAPEX, annualized_CAPEX, levelized_CAPEX = estimate_CAPEX(mcaptured, x)  # [kEUR, kEUR/yr, kEUR/t]
+    CAPEX, levelized_CAPEX = estimate_CAPEX(mcaptured, x)  # [kEUR, kEUR/yr, kEUR/t]
 
     # Calculate transport cost using sea distance
     distance = sea_distance(plant["hub"], x["destination"], sea_distances)  # [km]
-    print("<<< Missing Truck/Rail/Harbor costs >>>")
-    print(plant["hub"], x["destination"])
+    # print("<<< Missing Truck/Rail/Harbor costs >>>")
+    # print(plant["hub"], x["destination"])
     
     hub_value = x[plant["hub"].lower()]              # Get the value (1, 2, or 3) for this hub
     scenario = f"{hub_value}Mt"                      # Convert to scenario name (1Mt, 2Mt, or 3Mt)
     
     scenario_type = "optimist" if x["optimism"] else "pessimist"
     scenario_key = f"{scenario_type}_{scenario}"
-    print(scenario_key)
+    # print(scenario_key)
     
     transport_cost = transport_costs[scenario_key].predict([[distance]])[0]  # [EUR/t]
-    print(f"Transport cost at {distance} km: {transport_cost:.2f} EUR/t")
+    # print(f"Transport cost at {distance} km: {transport_cost:.2f} EUR/t")
 
     # Estimate OPEX
     OPEXfix = (CAPEX*1000 * x["OPEXfix"]) / (mcaptured/1000*3600 * x["FLH"])  # [EUR/t]
@@ -773,7 +773,7 @@ def plan_CCS(plant, x, transport_costs, sea_distances):
     OPEX = OPEXfix + OPEXmakeup + OPEXenergy                                  # [EUR/t]
 
     # Construct a reversed auction bid
-    CAC = levelized_CAPEX*1000 + OPEX + transport_cost                        # [EUR/t]
+    CAC = levelized_CAPEX + OPEX + transport_cost                        # [EUR/t]
     fossil = plant["Fossil"] / plant["Total"]                                 # [tfossil/t] share of fossil CO2
     biogenic = 1 - fossil                                                     # [tbiogenic/t] share of biogenic CO2
     incentives = fossil * x["ETS"] + biogenic * x["CRC"]                      # [EUR/t]
@@ -1069,20 +1069,20 @@ def WACCUS_EPR(
 
     # RQ2: subsidy costs
     if case == "CCUS":
+        CCU_names = ["Renova","SAKAB","Filbornaverket","Garstadverket","Sjolunda"]
+        CCS_names = ["Handeloverket","Bristaverket","Vasteras KVV","Hogdalenverket","Bolanderna"]
+    elif case == "CCU":
         CCU_names = ["Renova","SAKAB","Filbornaverket","Garstadverket","Sjolunda","Handeloverket","Bristaverket","Vasteras KVV","Hogdalenverket","Bolanderna"]
         CCS_names = []
-        CCS_names = []
-    elif case == "CCU":
-        CCU_names = ["All"]
-        CCS_names = None
     elif case == "CCS":
-        CCU_names = None
-        CCS_names = ["All"]
+        CCU_names = []
+        CCS_names = ["Renova","SAKAB","Filbornaverket","Garstadverket","Sjolunda","Handeloverket","Bristaverket","Vasteras KVV","Hogdalenverket","Bolanderna"]
 
     for _, plant in plants.iterrows():
         if plant["Name"] in CCS_names:
             FCCS, BECCS, bid, Ppenalty, Qpenalty = plan_CCS(plant, x, transport_costs, sea_distances)
-            print(plant["Name"], " ----> ",FCCS, BECCS, bid, Ppenalty, Qpenalty)
+            print(f"{'Plant Name':<20} {'FCCS':>10} {'BECCS':>10} {'Bid':>10} {'P Penalty':>12} {'Q Penalty':>12}")
+            print(f"{plant['Name']:<20} {FCCS:>10.2f} {BECCS:>10.2f} {bid:>10.2f} {Ppenalty:>12.2f} {Qpenalty:>12.2f}")
 
         if plant["Name"] in CCU_names:
             CCU, bid, Ppenalty, Qpenalty, Qmethanol = plan_CCU(plant, x)
@@ -1114,7 +1114,7 @@ if __name__ == "__main__":
     transport_costs, r2_scores, df = cost_transport()
     sea_distances = precalculate_sea_distances()
     thermo_props = get_thermo_properties()  # Get thermodynamic properties
-    fig, ax = plot_transport_costs(transport_costs, r2_scores, df, show_plot=False)
+    # fig, ax = plot_transport_costs(transport_costs, r2_scores, df, show_plot=False)
     
     # reading plant data and assign these to transport hubs
     plants = pd.read_csv("data/plants.csv")
