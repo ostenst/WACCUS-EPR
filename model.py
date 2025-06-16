@@ -107,12 +107,14 @@ def estimate_CAPEX(mcaptured, x):
     CAPEX = x["CAPEX_ref"] * (mannual / x["captured_ref"]) ** x["k"]  # [kEUR]
     CAPEX *= 1 + x["FOAK"]
     
-    # Calculate annualized and levelized CAPEX
-    CRF = (x["dr"] * (1 + x["dr"]) ** x["t"]) / ((1 + x["dr"]) ** x["t"] - 1)
-    annualized_CAPEX = CAPEX * CRF  # [kEUR/yr]
-    levelized_CAPEX = annualized_CAPEX / (mcaptured/1000*3600 * x["FLH"])  # [(kEUR/yr)/(t/yr)] -> [kEUR/t]
+    # Calculate levelized CAPEX using the levelize function
+    levelized_CAPEX = levelize(CAPEX, mcaptured, x)  # [EUR/t]
     
-    return CAPEX, annualized_CAPEX, levelized_CAPEX
+    # # Calculate annualized CAPEX for backward compatibility
+    # CRF = x["dr"] * (1 + x["dr"])**x["t"] / ((1 + x["dr"])**x["t"] - 1)
+    # annualized_CAPEX = CAPEX * CRF  # [kEUR/yr]
+    
+    return CAPEX, levelized_CAPEX
 
 def compression_energy(mcaptured, T1, P1, gas_type='CO2', n_stages=4, pressure_ratio=3.0, Tdiff=30, thermo_props=None, etais=0.8, printing=False):
     """
@@ -238,7 +240,338 @@ def compression_cost(Wcomp_list, gas_type='CO2', printing=False):
         
     return total_cost, stage_costs
 
-def plan_CCU(plant, x):
+def levelize(CAPEX, mcaptured, x):
+    """
+    Levelize CAPEX to EUR/tCO2.
+    
+    Args:
+        CAPEX: Capital expenditure [kEUR]
+        mcaptured: CO2 capture rate [kg/s]
+        x: dictionary containing parameters
+        
+    Returns:
+        float: Levelized CAPEX in EUR/tCO2
+    """
+    # Calculate annualized CAPEX using CRF
+    CRF = x["dr"] * (1 + x["dr"])**x["t"] / ((1 + x["dr"])**x["t"] - 1)
+    annualized_CAPEX = CAPEX * CRF  # [kEUR/yr]
+    
+    # Convert to per-ton costs
+    annual_CO2 = mcaptured/1000*3600 * x["FLH"]  # [tCO2/yr]
+    levelized_CAPEX = annualized_CAPEX / annual_CO2 * 1000  # [EUR/tCO2]
+    
+    return levelized_CAPEX
+
+def plot_CCU_CHP(plant, P, Qdh, Preb, Pcapture, PH2, Wcomp_CO2, Wcomp_H2, Qdhreb, Qhex, Qcool_CO2, Qrec_H2, Qcool_H2, Qdistill):
+    """
+    Create a bar plot showing power and heat changes in the CCU process.
+    
+    Args:
+        plant: Dictionary containing plant data
+        P: Final power output [MW]
+        Qdh: Final district heating output [MW]
+        Preb: Power for reboiler [MW]
+        Pcapture: Power for capture [MW]
+        PH2: Power for H2 production [kW]
+        Wcomp_CO2: CO2 compression power [MW]
+        Wcomp_H2: H2 compression power [MW]
+        Qdhreb: Heat for reboiler [MW]
+        Qhex: Heat from heat exchanger [MW]
+        Qcool_CO2: CO2 cooling heat [MW]
+        Qrec_H2: H2 recovery heat [kW]
+        Qcool_H2: H2 cooling heat [MW]
+        Qdistill: Distillation heat [MW]
+    """
+    # Create figure with two subplots
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+    
+    # Define colors
+    power_colors = {
+        'Initial': '#1f77b4',  # Blue
+        'Final': '#2ca9b8',    # Teal
+        'Reboiler': '#9b4dca', # Purple
+        'Power Capture Plant': '#4d79a6',  # Darker blue
+        'H2 Production': '#5d9cec', # Light blue
+        'CO2 Compression': '#7fb3d5', # Sky blue
+        'H2 Compression': '#a8d8ea'   # Light teal
+    }
+    
+    heat_colors = {
+        'Initial': '#d62728',  # Red
+        'Final': '#ff7f0e',    # Orange
+        'Reboiler': '#9b4dca', # Purple (same as power reboiler)
+        'Direct HEX DH': '#e57373', # Light red
+        'CO2 Cooling': '#ef9a9a',    # Pink
+        'Electrolyzer Heat': '#ffab91',    # Light orange
+        'H2 Cooling': '#ffcc80',     # Peach
+        'Distillation Heat': '#ffe082'    # Light yellow
+    }
+    
+    # Add grid
+    ax1.grid(True, linestyle='--', alpha=0.3)
+    ax2.grid(True, linestyle='--', alpha=0.3)
+    
+    # Power balance plot
+    power_initial = plant["P"]
+    power_final = P
+    
+    # Create power bars
+    bars1 = ax1.bar(['Initial', 'Change', 'Final'], 
+            [power_initial, 0, power_final], 
+            color=[power_colors['Initial'], 'gray', power_colors['Final']])
+    
+    # Annotate initial and final power values
+    ax1.text(0, power_initial, f'{power_initial:.1f}', ha='center', va='bottom')
+    ax1.text(2, power_final, f'{power_final:.1f}', ha='center', va='bottom')
+    
+    # Create detailed power change bar
+    power_components = {
+        'Reboiler': -Preb,
+        'Power Capture Plant': -Pcapture,
+        'H2 Production': -PH2/1000,
+        'CO2 Compression': -Wcomp_CO2,
+        'H2 Compression': -Wcomp_H2
+    }
+    
+    bottom = 0
+    for component, value in power_components.items():
+        bar = ax1.bar('Change', value, bottom=bottom, label=component, color=power_colors[component])
+        # Annotate each component
+        if value != 0:
+            ax1.text(1, bottom + value/2, f'{value:.1f}', ha='center', va='center', color='white')
+        bottom += value
+    
+    # Annotate total change
+    total_change = sum(power_components.values())
+    ax1.text(1, total_change, f'{total_change:.1f}', ha='center', va='bottom')
+    
+    ax1.set_title('Power Balance')
+    ax1.set_ylabel('Power [MW]')
+    ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    
+    # Heat balance plot
+    heat_initial = plant["Qdh"]
+    heat_final = Qdh
+    
+    # Create heat bars for initial and final states
+    bars2 = ax2.bar(['Initial', 'Change', 'Final'], 
+            [heat_initial, 0, heat_final], 
+            color=[heat_colors['Initial'], 'gray', heat_colors['Final']])
+    
+    # Annotate initial and final heat values
+    ax2.text(0, heat_initial, f'{heat_initial:.1f}', ha='center', va='bottom')
+    ax2.text(2, heat_final, f'{heat_final:.1f}', ha='center', va='bottom')
+    
+    # Create detailed heat change bar
+    heat_components_negative = {
+        'Reboiler': -Qdhreb,
+    }
+    
+    heat_components_positive = {
+        'Direct HEX DH': Qhex,
+        'CO2 Cooling': Qcool_CO2,
+        'Electrolyzer Heat': Qrec_H2/1000,
+        'H2 Cooling': Qcool_H2,
+        'Distillation Heat': Qdistill
+    }
+    
+    # Plot negative components first
+    bottom = 0
+    for component, value in heat_components_negative.items():
+        bar = ax2.bar('Change', value, bottom=bottom, label=component, color=heat_colors[component])
+        # Annotate each component
+        if value != 0:
+            ax2.text(1, bottom + value/2, f'{value:.1f}', ha='center', va='center', color='white')
+        bottom += value
+    
+    # Reset bottom to 0 for positive components
+    bottom = 0
+    for component, value in heat_components_positive.items():
+        bar = ax2.bar('Change', value, bottom=bottom, label=component, color=heat_colors[component])
+        # Annotate each component
+        if value != 0:
+            ax2.text(1, bottom + value/2, f'{value:.1f}', ha='center', va='center', color='white')
+        bottom += value
+    
+    # Annotate total change
+    total_change = sum(heat_components_negative.values()) + sum(heat_components_positive.values())
+    ax2.text(1, total_change, f'{total_change:.1f}', ha='center', va='bottom')
+    
+    ax2.set_title('Heat Balance')
+    ax2.set_ylabel('Heat [MW]')
+    ax2.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    
+    plt.tight_layout()
+    
+    # Save figure at 600 dpi
+    fig.savefig('CCU_CHP_balance.png', dpi=600, bbox_inches='tight')
+    
+    return fig
+
+def plot_CCU_combined(plant, P, Qdh, Preb, Pcapture, PH2, Wcomp_CO2, Wcomp_H2, Qdhreb, Qhex, Qcool_CO2, Qrec_H2, Qcool_H2, Qdistill, Qmethanol):
+    """
+    Create a combined bar plot showing power and heat changes in the CCU process.
+    
+    Args:
+        plant: Dictionary containing plant data
+        P: Final power output [MW]
+        Qdh: Final district heating output [MW]
+        Preb: Power for reboiler [MW]
+        Pcapture: Power for capture [MW]
+        PH2: Power for H2 production [kW]
+        Wcomp_CO2: CO2 compression power [MW]
+        Wcomp_H2: H2 compression power [MW]
+        Qdhreb: Heat for reboiler [MW]
+        Qhex: Heat from heat exchanger [MW]
+        Qcool_CO2: CO2 cooling heat [MW]
+        Qrec_H2: H2 recovery heat [kW]
+        Qcool_H2: H2 cooling heat [MW]
+        Qdistill: Distillation heat [MW]
+        Qmethanol: Methanol production heat [MW]
+    """
+    # Create figure
+    fig, ax = plt.subplots(figsize=(15, 8))
+    
+    # Add grid
+    ax.grid(True, linestyle='--', alpha=0.3)
+    
+    # Define colors (same as before)
+    power_colors = {
+        'Initial': '#1f77b4',  # Blue
+        'Final': '#2ca9b8',    # Teal
+        'Reboiler': '#9b4dca', # Purple
+        'Power Capture Plant': '#4d79a6',  # Darker blue
+        'H2 Production': '#5d9cec', # Light blue
+        'CO2 Compression': '#7fb3d5', # Sky blue
+        'H2 Compression': '#a8d8ea'   # Light teal
+    }
+    
+    heat_colors = {
+        'Initial': '#d62728',  # Red
+        'Final': '#ff7f0e',    # Orange
+        'Reboiler': '#9b4dca', # Purple (same as power reboiler)
+        'Direct HEX DH': '#e57373', # Light red
+        'CO2 Cooling': '#ef9a9a',    # Pink
+        'Electrolyzer Heat': '#ffab91',    # Light orange
+        'H2 Cooling': '#ffcc80',     # Peach
+        'Distillation Heat': '#ffe082'    # Light yellow
+    }
+    
+    # Set up the x-axis positions
+    x_positions = ['Initial', 'Change', 'Final', 'Methanol']
+    x = np.arange(len(x_positions))
+    width = 0.35  # Width of the bars
+    
+    # Plot initial state
+    ax.bar(x[0] - width/2, plant["P"], width, label='Power', color=power_colors['Initial'])
+    ax.bar(x[0] + width/2, plant["Qdh"], width, label='Heat', color=heat_colors['Initial'])
+    
+    # Annotate initial values
+    ax.text(x[0] - width/2, plant["P"], f'{plant["P"]:.1f}', ha='center', va='bottom')
+    ax.text(x[0] + width/2, plant["Qdh"], f'{plant["Qdh"]:.1f}', ha='center', va='bottom')
+    
+    # Plot change components
+    # Power components
+    power_components = {
+        'Reboiler': -Preb,
+        'Power Capture Plant': -Pcapture,
+        'H2 Production': -PH2/1000,
+        'CO2 Compression': -Wcomp_CO2,
+        'H2 Compression': -Wcomp_H2
+    }
+    
+    bottom = 0
+    for component, value in power_components.items():
+        bar = ax.bar(x[1] - width/2, value, width, bottom=bottom, label=f'Power: {component}', color=power_colors[component])
+        # Annotate each component
+        if value != 0:
+            ax.text(x[1] - width/2, bottom + value/2, f'{value:.1f}', ha='center', va='center', color='white')
+        bottom += value
+    
+    # Heat components
+    heat_components_negative = {
+        'Reboiler': -Qdhreb,
+    }
+    
+    heat_components_positive = {
+        'Direct HEX DH': Qhex,
+        'CO2 Cooling': Qcool_CO2,
+        'Electrolyzer Heat': Qrec_H2/1000,
+        'H2 Cooling': Qcool_H2,
+        'Distillation Heat': Qdistill
+    }
+    
+    # Plot negative heat components
+    bottom = 0
+    for component, value in heat_components_negative.items():
+        bar = ax.bar(x[1] + width/2, value, width, bottom=bottom, label=f'Heat: {component}', color=heat_colors[component])
+        # Annotate each component
+        if value != 0:
+            ax.text(x[1] + width/2, bottom + value/2, f'{value:.1f}', ha='center', va='center', color='white')
+        bottom += value
+    
+    # Plot positive heat components
+    bottom = 0
+    for component, value in heat_components_positive.items():
+        bar = ax.bar(x[1] + width/2, value, width, bottom=bottom, label=f'Heat: {component}', color=heat_colors[component])
+        # Annotate each component
+        if value != 0:
+            ax.text(x[1] + width/2, bottom + value/2, f'{value:.1f}', ha='center', va='center', color='white')
+        bottom += value
+    
+    # Plot final state
+    ax.bar(x[2] - width/2, P, width, color=power_colors['Final'])
+    ax.bar(x[2] + width/2, Qdh, width, color=heat_colors['Final'])
+    
+    # Annotate final values
+    ax.text(x[2] - width/2, P, f'{P:.1f}', ha='center', va='bottom')
+    ax.text(x[2] + width/2, Qdh, f'{Qdh:.1f}', ha='center', va='bottom')
+    
+    # Plot methanol production
+    ax.bar(x[3] - width/2, Qmethanol, width, color='red', label='Methanol Production', alpha=0.5)
+    ax.text(x[3] - width/2, Qmethanol, f'{Qmethanol:.1f}', ha='center', va='bottom')
+    ax.bar(x[3] + width/2, -((plant["Qwaste"]+abs(P))-(Qdh+Qmethanol)), width, color='red', label='Methanol losses', hatch='////', alpha=0.5)
+    ax.text(x[3] + width/2, -((plant["Qwaste"]+abs(P))-(Qdh+Qmethanol)), f'{((plant["Qwaste"]+abs(P))-(Qdh+Qmethanol)):.1f}', ha='center', va='bottom')
+    
+    # Customize the plot
+    ax.set_ylabel('Energy [MW]')
+    ax.set_title(f'{plant["Name"]} - Waste CHP and methanol balance [MW]')
+    ax.set_xticks(x)
+    ax.set_xticklabels(x_positions)
+    
+    # Add a horizontal line at y=0
+    ax.axhline(y=0, color='black', linestyle='-', alpha=0.3)
+    
+    # Create custom legend
+    from matplotlib.patches import Patch
+    legend_elements = [
+        Patch(facecolor=power_colors['Initial'], label='Power: Initial'),
+        Patch(facecolor=heat_colors['Initial'], label='Heat: Initial'),
+        Patch(facecolor=power_colors['Final'], label='Power: Final'),
+        Patch(facecolor=heat_colors['Final'], label='Heat: Final'),
+        Patch(facecolor=power_colors['Reboiler'], label='Reboiler (Power & Heat)'),
+        Patch(facecolor='red', label='Methanol Production', alpha=0.5),
+        Patch(facecolor='red', label='Methanol losses', hatch='////', alpha=0.5),
+    ]
+    
+    # Add power components to legend
+    for component in ['Power Capture Plant', 'H2 Production', 'CO2 Compression', 'H2 Compression']:
+        legend_elements.append(Patch(facecolor=power_colors[component], label=f'Power: {component}'))
+    
+    # Add heat components to legend
+    for component in ['Direct HEX DH', 'CO2 Cooling', 'Electrolyzer Heat', 'H2 Cooling', 'Distillation Heat']:
+        legend_elements.append(Patch(facecolor=heat_colors[component], label=f'Heat: {component}'))
+    
+    ax.legend(handles=legend_elements, bbox_to_anchor=(1.05, 1), loc='upper left')
+    
+    plt.tight_layout()
+    
+    # Save figure at 600 dpi
+    fig.savefig('CCU_combined_balance.png', dpi=600, bbox_inches='tight')
+    
+    return fig
+
+def plan_CCU(plant, x, plot_single=False):
     # burn fuel
     mfuel = plant["Qwaste"] / (x["LHV"]/3600) /3600  # [kgf/s]
     mCO2 = mfuel* x["Ccontent"] * 44/12              # [kgCO2/s]
@@ -267,9 +600,6 @@ def plan_CCU(plant, x):
     Wcomp_CO2 = sum(Wcomp_list)  # [MW]
     cost_CO2, _ = compression_cost(Wcomp_list, 'CO2', printing=False)
     Qcool_CO2 = sum(Qcool_list)  # [MW]
-
-    print("Could recover the Qcool from compression using HEXs")
-    print("Do a recovery strategy across all equipment later! Include HEX costs for both CCU/CCS")
 
     # produce H2 from AEL electrolyzer
     Hi = 241.82             # [kJ/molH2] [Formelsamling]
@@ -306,29 +636,86 @@ def plan_CCU(plant, x):
 
     # penalize CHP and recover Qdh
     P = plant["P"] * (1 - Qreb/plant["Qwaste"])      # assuming live steam is used for reboiler
+    Preb = plant["P"]*Qreb/plant["Qwaste"]
     P = P - Pcapture - PH2/1000 - Wcomp_CO2 - Wcomp_H2
 
     Qdh = plant["Qdh"] * (1 - Qreb/plant["Qwaste"])
+    Qdhreb = plant["Qdh"]*Qreb/plant["Qwaste"]
     Qdh = Qdh + Qhex + Qcool_CO2 + Qrec_H2/1000 + Qcool_H2 + Qdistill
 
-    Ppenalty = (plant["P"] - P) * x["FLH"]           # [MWh/yr] probably very positive
-    Qpenalty = (plant["Qdh"] - Qdh) * x["FLH"]       # [MWh/yr] probably negative
-    Qmethanol = Qmethanol * x["FLH"]                 # [MWh/yr] positive
-    print(Ppenalty, Qpenalty, Qmethanol)
+    Ppenalty = (plant["P"] - P) * x["FLH"] /1000          # [GWh/yr] probably very positive
+    Qpenalty = (plant["Qdh"] - Qdh) * x["FLH"] /1000     # [GWh/yr] probably negative
+    Qmethanol = Qmethanol * x["FLH"] /1000               # [GWh/yr] positive
 
-    # Estimate CAPEX of capture plant
-    CAPEX, annualized_CAPEX, levelized_CAPEX = estimate_CAPEX(mcaptured, x)  # [kEUR, kEUR/yr, kEUR/tCO2] NOTE: Includes compression/liq CAPEX...
+    # Estimate CAPEX and OPEX of all units
+    CAPEX, levelized_CAPEX = estimate_CAPEX(mcaptured, x)  # [kEUR, EUR/tCO2] NOTE: Includes compression/liq CAPEX...
     CAPEX_H2 = 550/1000 * PH2 # [kEUR] [Danish]
     OPEX_H2 = 0.04 * CAPEX_H2 # [kEUR/yr] 
-    CAPEX_synthesis = 0.7*1000 * Qmethanol/x["FLH"] # [kEUR] [Beiron, Grahn]
-    OPEX_synthesis = 0.05 * CAPEX_synthesis # [kEUR/yr] NOTE: No CAPEX for destillation section here
-    print("TODO: LEVELIZE ALL CAPEX AND OPEX BASED ON THE TONS OF CO2 NEUTRALIZED - THAT IS THE BID")
+    CAPEX_synthesis = 1.09*1000 * Qmethanol/x["FLH"] # [kEUR] [Beiron, Grahn, no Danish! Includes destillation probably]
+    OPEX_synthesis = 0.05 * CAPEX_synthesis # [kEUR/yr]
 
-    CCU = 1
-    bid = 2
-    Ppenalty = 3
-    Qpenalty = 4
-    return CCU, bid, Ppenalty, Qpenalty
+    levelized_CAPEX_H2 = levelize(CAPEX_H2, mcaptured, x)
+    levelized_CAPEX_synthesis = levelize(CAPEX_synthesis, mcaptured, x)
+    levelized_CAPEX_CO2_comp = levelize(cost_CO2/1000, mcaptured, x)  # Convert cost_CO2 from EUR to kEUR
+    levelized_CAPEX_H2_comp = levelize(cost_H2/1000, mcaptured, x)    # Convert cost_H2 from EUR to kEUR
+
+    annual_CO2 = mcaptured/1000*3600 * x["FLH"]  # [tCO2/yr]
+    levelized_OPEX_H2 = OPEX_H2 / annual_CO2 * 1000  # [EUR/tCO2]
+    levelized_OPEX_synthesis = OPEX_synthesis / annual_CO2 * 1000  # [EUR/tCO2]
+
+    # Summarize and bid
+    CAC = levelized_CAPEX + levelized_CAPEX_H2 + levelized_CAPEX_synthesis + levelized_OPEX_H2 + levelized_OPEX_synthesis + levelized_CAPEX_CO2_comp + levelized_CAPEX_H2_comp
+
+    costs_power = Ppenalty*1000*x["celc"] / annual_CO2 # [EUR/tCO2] 
+    revenues_heat = - Qpenalty*1000*x["celc"]*x["cheat"] / annual_CO2 # [EUR/tCO2] 
+    revenues_methanol = (Qmethanol*1000 * 3600 / 21.1 /1000)*x["pmethanol"] / annual_CO2 # [EUR/tCO2] [Beiron, Qmethanol[MW LHV]=> tons of methanol] 
+    energy_revenues = revenues_heat + revenues_methanol - costs_power # [EUR/tCO2]
+
+    bid = CAC - x["ETS"] - energy_revenues # [EUR/tCO2]
+
+    fossil = plant["Fossil"] / plant["Total"]                                 # [tfossil/t] share of fossil CO2
+    biogenic = 1 - fossil  
+    FCCU = mcaptured*10**-6*3600 * x["FLH"] * fossil                           # [ktCO2/yr]
+    BCCU = mcaptured*10**-6*3600 * x["FLH"] * biogenic                        # [ktCO2/yr]
+    CCU = FCCU + BCCU                                                         # [ktCO2/yr]
+
+    if plot_single:
+        fig1 = plot_CCU_CHP(
+            plant=plant,
+            P=P,
+            Qdh=Qdh,
+            Preb=Preb,
+            Pcapture=Pcapture,
+            PH2=PH2,
+            Wcomp_CO2=Wcomp_CO2,
+            Wcomp_H2=Wcomp_H2,
+            Qdhreb=Qdhreb,
+            Qhex=Qhex,
+            Qcool_CO2=Qcool_CO2,
+            Qrec_H2=Qrec_H2,
+            Qcool_H2=Qcool_H2,
+            Qdistill=Qdistill
+        )
+        
+        fig2 = plot_CCU_combined(
+            plant=plant,
+            P=P,
+            Qdh=Qdh,
+            Preb=Preb,
+            Pcapture=Pcapture,
+            PH2=PH2,
+            Wcomp_CO2=Wcomp_CO2,
+            Wcomp_H2=Wcomp_H2,
+            Qdhreb=Qdhreb,
+            Qhex=Qhex,
+            Qcool_CO2=Qcool_CO2,
+            Qrec_H2=Qrec_H2,
+            Qcool_H2=Qcool_H2,
+            Qdistill=Qdistill,
+            Qmethanol=Qmethanol/x["FLH"]*1000
+        )
+
+    return CCU, bid, Ppenalty, Qpenalty, Qmethanol
 
 def plan_CCS(plant, x, transport_costs, sea_distances):
     # burn fuel
@@ -358,8 +745,8 @@ def plan_CCS(plant, x, transport_costs, sea_distances):
             Whp = P
     Qdh = Qdh + Qhex + Whp*x["COP"]
     P -= Whp
-    Ppenalty = (plant["P"] - P) * x["FLH"]           # [MWh/yr]
-    Qpenalty = (plant["Qdh"] - Qdh) * x["FLH"]       # [MWh/yr]
+    Ppenalty = (plant["P"] - P) * x["FLH"] /1000     # [GWh/yr]
+    Qpenalty = (plant["Qdh"] - Qdh) * x["FLH"] /1000 # [GWh/yr]
 
     # Estimate CAPEX
     CAPEX, annualized_CAPEX, levelized_CAPEX = estimate_CAPEX(mcaptured, x)  # [kEUR, kEUR/yr, kEUR/t]
@@ -607,6 +994,7 @@ def WACCUS_EPR(
     cheat = 0.80,       # [% of elc]
     CRC = 100,          # [EUR/tCO2]
     ETS = 80,           # [EUR/tCO2]
+    pmethanol = 625,    # [EUR/t]
 
     lulea = 1,          # [1,2,3] [Mt/yr]
     sundsvall = 1,      # [1,2,3] [Mt/yr]
@@ -657,6 +1045,7 @@ def WACCUS_EPR(
         "cheat": cheat,
         "CRC": CRC,
         "ETS": ETS,
+        "pmethanol": pmethanol,
 
         "tax": tax,
         "groups": groups,
@@ -680,8 +1069,8 @@ def WACCUS_EPR(
 
     # RQ2: subsidy costs
     if case == "CCUS":
-        CCU_names = ["Handeloverket"]
-        CCS_names = ["Renova","SAKAB","Filbornaverket","Garstadverket","Sjolunda","Handeloverket","Bristaverket","Bolanderna"]
+        CCU_names = ["Renova","SAKAB","Filbornaverket","Garstadverket","Sjolunda","Handeloverket","Bristaverket","Vasteras KVV","Hogdalenverket","Bolanderna"]
+        CCS_names = []
         CCS_names = []
     elif case == "CCU":
         CCU_names = ["All"]
@@ -696,7 +1085,9 @@ def WACCUS_EPR(
             print(plant["Name"], " ----> ",FCCS, BECCS, bid, Ppenalty, Qpenalty)
 
         if plant["Name"] in CCU_names:
-            CCU, bid, Ppenalty, Qpenalty = plan_CCU(plant, x)
+            CCU, bid, Ppenalty, Qpenalty, Qmethanol = plan_CCU(plant, x)
+            print(f"{'Plant Name':<20} {'CCU':>10} {'Bid':>10} {'P Penalty':>12} {'Q Penalty':>12} {'Q Methanol':>12}")
+            print(f"{plant['Name']:<20} {CCU:>10.2f} {bid:>10.2f} {Ppenalty:>12.2f} {Qpenalty:>12.2f} {Qmethanol:>12.2f}")
 
     # RQ2: reversed auction simulation
     # NOTE: need to add a check for bid < 0
@@ -740,4 +1131,8 @@ if __name__ == "__main__":
         sea_distances=sea_distances,  # Pass pre-calculated distances dict
         thermo_props=thermo_props     # Pass thermodynamic properties
     )
+    
+    print("Most CCU plants are near profitable already - consider adding higher electrolyzer costs etc., also no ETS incentive?")
+    print("I should verify the methanol production - is it reasonable really?")
+    plt.show()
 
