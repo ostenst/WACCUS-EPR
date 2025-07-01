@@ -596,6 +596,8 @@ def plan_CCU(plant, x, plot_single=False):
         etais=x["etais"],
         printing=False
     )
+    print(P_list)
+    print(T_list)
     Wcomp_CO2 = sum(Wcomp_list)  # [MW]
     cost_CO2, _ = compression_cost(Wcomp_list, 'CO2', printing=False)
     Qcool_CO2 = sum(Qcool_list)  # [MW]
@@ -624,6 +626,8 @@ def plan_CCU(plant, x, plot_single=False):
         etais=x["etais"],
         printing=False
     )
+    print(P_list)
+    print(T_list)
     Wcomp_H2 = sum(Wcomp_list)  # [MW]
     cost_H2, _ = compression_cost(Wcomp_list, 'H2', printing=False)
     Qcool_H2 = sum(Qcool_list)  # [MW]
@@ -645,6 +649,20 @@ def plan_CCU(plant, x, plot_single=False):
     Ppenalty = (plant["P"] - P) * x["FLH"] /1000          # [GWh/yr] probably very positive
     Qpenalty = (plant["Qdh"] - Qdh) * x["FLH"] /1000     # [GWh/yr] probably negative
     Qmethanol = Qmethanol * x["FLH"] /1000               # [GWh/yr] positive
+
+    KPI1 = Qmethanol/x["FLH"]*1000 / (plant["Qwaste"] + (-P)) # [MW/MW]
+    KPI2 = (Qmethanol/x["FLH"]*1000 + Qdh)/ (plant["Qwaste"] + (-P)) # [MW/MW]
+    KPI21 = 1 - ((plant["Qwaste"]+abs(P))-(Qdh+Qmethanol/x["FLH"]*1000)) / (plant["Qwaste"] + (-P)) # [MW/MW]
+    KPI3 = (-P) / ((plant["P"] * (1 - Qreb/plant["Qwaste"])) + (plant["Qdh"] * (1 - Qreb/plant["Qwaste"])) + (Qmethanol/x["FLH"]*1000)) # [MW/MW]
+    KPI4 = (-P) / (Qmethanol/x["FLH"]*1000)
+    KPI5 = ((plant["Qwaste"]+abs(P))-(Qdh+Qmethanol/x["FLH"]*1000)) / (Qmethanol/x["FLH"]*1000)
+
+    print(f"KPI1: {KPI1:.2f}")
+    print(f"KPI2: {KPI2:.2f}")
+    print(f"KPI2: {KPI21:.2f}")
+    print(f"KPI3: {KPI3:.2f}")
+    print(f"KPI4: {KPI4:.2f}")
+    print(f"KPI5: {KPI5:.2f}")
 
     # Estimate CAPEX and OPEX of all units
     CAPEX, levelized_CAPEX = estimate_CAPEX(mcaptured, x)  # [kEUR, EUR/tCO2] NOTE: Includes compression/liq CAPEX...
@@ -1172,7 +1190,8 @@ def WACCUS_EPR(
         CCU_names = ["Renova","SAKAB","Filbornaverket","Garstadverket","Sjolunda"]
         CCS_names = ["Handeloverket","Bristaverket","Vasteras KVV","Hogdalenverket","Bolanderna"]
     elif case == "CCU":
-        CCU_names = ["Renova","SAKAB","Filbornaverket","Garstadverket","Sjolunda","Handeloverket","Bristaverket","Vasteras KVV","Hogdalenverket","Bolanderna"]
+        # CCU_names = ["Renova","SAKAB","Filbornaverket","Garstadverket","Sjolunda","Handeloverket","Bristaverket","Vasteras KVV","Hogdalenverket","Bolanderna"]
+        CCU_names = ["Renova"]
         CCS_names = []
     elif case == "CCS":
         CCU_names = []
@@ -1322,7 +1341,7 @@ if __name__ == "__main__":
     output = WACCUS_EPR(
         plants=plants, 
         k=k, 
-        case="CCUS", 
+        case="CCU", 
         transport_costs=transport_costs,
         sea_distances=sea_distances,  # Pass pre-calculated distances dict
         thermo_props=thermo_props     # Pass thermodynamic properties
@@ -1335,5 +1354,18 @@ if __name__ == "__main__":
     print("Most CCU plants are near profitable already - consider adding higher electrolyzer costs etc., also no ETS incentive?")
     print("I should verify the methanol production - is it reasonable really?")
     print("Let's start with CCS cases and auctions then!")
+
+    print("--- Feedback from Johanna/Judit ---")
+    print("The KPIs are ish similar to those in Johanna's study. However, I am to optimistic about recovering waste heat.")
+    print("Compressors: These cannot increase to the Tsynthesis, they should be reduced to 40C ish in every stage")
+    print("-> However, I might neglect that issue. Otherwise, I must add a heater to re-heat the CO2 and H2 entering the synthesis")
+    print("The largest heat recovery units are: from the amine capture plant (reboiler), ALK electrolyzer, and the methanol synthesis.")
+    print("-> These deserve greater attention - mainly, I must verify that the heat temperatures are ok for DH applications")
+    print("-> Check how much heat the synthesis produces, it should be transferred to the destillation first, and THEN MAYBE some of this remaining heat is available for either the qreboiler (exciting option!) or for DH (but check temperatures)")
+    print("-> It is far from certain that you can recover this much heat from the destillation - its not necesarily true that 80percent of the energy in raw methanol becomes methanol and that 20percent to DH.")
+    print("----> Check with Johanna for sources on that, possibly? Also, we need a pure destillation (cannot do without) since we use it for plastic/chemicals")
+    print("-> It's uncertain how much heat can be recovered from electrolyzers - ask Tharun! He has the percentage and termperatures ... or maybe the MSc thesis")
+    print("Finally, double check the conversion from H2 to methanol in synthesis - can I do it as an energy conversion, 100prc H2 to 100prc methanol? Do it via reaciton formula and LHV values as well! Check!")
+    print("-> This is suspicious because one H2 should be lost (mass-wise) for each methanol molecule produced: CO2+3H2=>CH3OH+H2O")
     plt.show()
 
