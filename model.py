@@ -1367,5 +1367,6 @@ if __name__ == "__main__":
     print("-> It's uncertain how much heat can be recovered from electrolyzers - ask Tharun! He has the percentage and termperatures ... or maybe the MSc thesis")
     print("Finally, double check the conversion from H2 to methanol in synthesis - can I do it as an energy conversion, 100prc H2 to 100prc methanol? Do it via reaciton formula and LHV values as well! Check!")
     print("-> This is suspicious because one H2 should be lost (mass-wise) for each methanol molecule produced: CO2+3H2=>CH3OH+H2O")
+    print(" .... She thinks I MUST DO EXERGY ANALYSIS... since heat is different... well, I don't think so, since I only need MONEY analysis!")
     plt.show()
 
