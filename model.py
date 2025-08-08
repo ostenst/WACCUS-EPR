@@ -687,10 +687,18 @@ def plan_CCU(plant, x, plot_single=False):
     revenues_heat = - Qpenalty*1000*x["celc"]*x["cheat"] / annual_CO2 # [EUR/tCO2] 
     revenues_methanol = (Qmethanol*1000 * 3600 / 21.1 /1000)*x["pmethanol"] / annual_CO2 # [EUR/tCO2] [Beiron, Qmethanol[MW LHV]=> tons of methanol] 
     energy_revenues = revenues_heat + revenues_methanol - costs_power # [EUR/tCO2]
+    print(f"costs_power: {costs_power:.2f} EUR/tCO2")
+    print(f"revenues_heat: {revenues_heat:.2f} EUR/tCO2")
+    print(f"revenues_methanol: {revenues_methanol:.2f} EUR/tCO2")
+    print(f"energy_revenues: {energy_revenues:.2f} EUR/tCO2")
 
-    bid = CAC - x["ETS"] - energy_revenues # [EUR/tCO2]
+    fossil = plant["Fossil"] / plant["Total"]                               # [tfossil/t] share of fossil CO2
+    bid = CAC - x["ETS"]*fossil - energy_revenues # [EUR/tCO2]
+    print(f"CAC: {CAC:.2f} EUR/tCO2")
+    print(f"ETS: {x['ETS']*fossil:.2f} EUR/tCO2")
+    print(f"energy_revenues: {energy_revenues:.2f} EUR/tCO2")
+    print(f"bid: {bid:.2f} EUR/tCO2")
 
-    fossil = plant["Fossil"] / plant["Total"]                                 # [tfossil/t] share of fossil CO2
     biogenic = 1 - fossil  
     FCCU = mcaptured*10**-6*3600 * x["FLH"] * fossil                           # [ktCO2/yr]
     BCCU = mcaptured*10**-6*3600 * x["FLH"] * biogenic                        # [ktCO2/yr]
@@ -786,14 +794,27 @@ def plan_CCS(plant, x, transport_costs, sea_distances):
     OPEXfix = (CAPEX*1000 * x["OPEXfix"]) / (mcaptured/1000*3600 * x["FLH"])  # [EUR/t]
     OPEXmakeup = x["makeup"] * x["camine"]                                    # [EUR/t]
     OPEXenergy = (Ppenalty*x["celc"] + Qpenalty*x["celc"]*x["cheat"]) / (mcaptured/1000*3600 * x["FLH"])  # [EUR/t]
-    OPEX = OPEXfix + OPEXmakeup + OPEXenergy                                  # [EUR/t]
+    OPEX = OPEXfix + OPEXmakeup + OPEXenergy     
+    print(" ")
+    print("OPEX FIXED IS VERY HIGH?")
+    print(f"OPEXfix: {OPEXfix:.2f} EUR/tCO2")
+    print(f"OPEXmakeup: {OPEXmakeup:.2f} EUR/tCO2")
+    print(f"OPEXenergy: {OPEXenergy:.2f} EUR/tCO2")
+    print(f"OPEX: {OPEX:.2f} EUR/tCO2")
 
     # Construct a reversed auction bid
     CAC = levelized_CAPEX + OPEX + transport_cost                        # [EUR/t]
     fossil = plant["Fossil"] / plant["Total"]                                 # [tfossil/t] share of fossil CO2
     biogenic = 1 - fossil                                                     # [tbiogenic/t] share of biogenic CO2
     incentives = fossil * x["ETS"] + biogenic * x["CRC"]                      # [EUR/t]
-  
+    print(" ")
+    print(f"CAC: {CAC:.2f} EUR/tCO2")
+    print(f"levelized_CAPEX: {levelized_CAPEX:.2f} EUR/tCO2")
+    print(f"OPEX: {OPEX:.2f} EUR/tCO2")
+    print(f"transport_cost: {transport_cost:.2f} EUR/tCO2")
+    print(f"incentives: {incentives:.2f} EUR/tCO2")
+    print(f"fossil: {fossil * x['ETS']:.2f} EUR/tCO2")
+    print(f"biogenic: {biogenic * x['CRC']:.2f} EUR/tCO2")
     bid = CAC - incentives                                                     # [EUR/t]
 
     FCCS = mcaptured*10**-6*3600 * x["FLH"] * fossil                           # [ktCO2/yr]
@@ -1190,8 +1211,8 @@ def WACCUS_EPR(
         CCU_names = ["Renova","SAKAB","Filbornaverket","Garstadverket","Sjolunda"]
         CCS_names = ["Handeloverket","Bristaverket","Vasteras KVV","Hogdalenverket","Bolanderna"]
     elif case == "CCU":
-        # CCU_names = ["Renova","SAKAB","Filbornaverket","Garstadverket","Sjolunda","Handeloverket","Bristaverket","Vasteras KVV","Hogdalenverket","Bolanderna"]
-        CCU_names = ["Renova"]
+        CCU_names = ["Renova","SAKAB","Filbornaverket","Garstadverket","Sjolunda","Handeloverket","Bristaverket","Vasteras KVV","Hogdalenverket","Bolanderna"]
+        # CCU_names = ["Renova"]
         CCS_names = []
     elif case == "CCS":
         CCU_names = []
@@ -1341,7 +1362,7 @@ if __name__ == "__main__":
     output = WACCUS_EPR(
         plants=plants, 
         k=k, 
-        case="CCU", 
+        case="CCS", 
         transport_costs=transport_costs,
         sea_distances=sea_distances,  # Pass pre-calculated distances dict
         thermo_props=thermo_props     # Pass thermodynamic properties
@@ -1368,5 +1389,7 @@ if __name__ == "__main__":
     print("Finally, double check the conversion from H2 to methanol in synthesis - can I do it as an energy conversion, 100prc H2 to 100prc methanol? Do it via reaciton formula and LHV values as well! Check!")
     print("-> This is suspicious because one H2 should be lost (mass-wise) for each methanol molecule produced: CO2+3H2=>CH3OH+H2O")
     print(" .... She thinks I MUST DO EXERGY ANALYSIS... since heat is different... well, I don't think so, since I only need MONEY analysis!")
+    print(" ")
+    print("I should ask EON about the feasibility of CCU - seems like power costs are higher than methanol revenues?!")
     plt.show()
 
