@@ -1362,7 +1362,7 @@ if __name__ == "__main__":
     output = WACCUS_EPR(
         plants=plants, 
         k=k, 
-        case="CCS", 
+        case="CCU", 
         transport_costs=transport_costs,
         sea_distances=sea_distances,  # Pass pre-calculated distances dict
         thermo_props=thermo_props     # Pass thermodynamic properties
