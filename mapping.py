@@ -22,24 +22,18 @@ def plot_europe():
     # Read the Europe shapefile and convert to WGS84 coordinate system
     europe = gpd.read_file("shapefiles/Europe/Europe_merged.shp").to_crs("EPSG:4326")
     
-    # Read plants data from plants_mapping_old.csv
-    plants_df = pd.read_csv("data/plants_mapping_old.csv")
-    
-    # Calculate Total CO2 emissionsfeature for each plant
-    plants_df['Total'] = (plants_df['Heat output (MWheat)'] + plants_df['Electric output (MWe)']) / 11 * 1.05 * 3600 / 1000 * 8760
+    # Read plants data from plants.csv
+    plants_df = pd.read_csv("data/plants.csv")
 
-
-
-    waste_plants = plants_df[plants_df['Fuel (W=waste, B=biomass)'] == 'W']
     # Print the sum of the Totals
-    total_sum = waste_plants['Total'].sum()
-    print(f"Sum of Totals: {total_sum}")
+    total_sum = plants_df['Total'].sum()
+    print(f"Sum of Totals: {total_sum} ktCO2/yr")
 
     plt.figure(figsize=(12, 5))
-    plt.bar(waste_plants['Name'], waste_plants['Total'], color='green', alpha=0.7)
-    plt.ylabel('Total (units)')
+    plt.bar(plants_df['Name'], plants_df['Total'], color='green', alpha=0.7)
+    plt.ylabel('Total (ktCO2/yr)')
     plt.xlabel('Plant Name')
-    plt.title('Total per Waste-Fueled Plant')
+    plt.title('Total CO2 Emissions per Plant')
     plt.xticks(rotation=90)
     plt.tight_layout()
 
@@ -51,29 +45,58 @@ def plot_europe():
     
     # Plot origins as crimson diamonds
     for name, lon, lat in origins:
-        ax.scatter(lon, lat, marker='D', s=100, color='crimson', edgecolor='black', linewidth=1, zorder=5)
+        ax.scatter(lon, lat, marker='D', s=75, color='crimson', edgecolor='black', linewidth=1, zorder=5)
     
     # Plot destinations as crimson diamonds
     for name, lon, lat in destinations:
-        ax.scatter(lon, lat, marker='D', s=100, color='maroon', edgecolor='black', linewidth=1, zorder=5)
+        ax.scatter(lon, lat, marker='D', s=75, color='maroon', edgecolor='black', linewidth=1, zorder=5)
     
-    # Plot only waste-fueled plants (W) as bubbles with size based on calculated Total value
-    waste_plants = plants_df[plants_df['Fuel (W=waste, B=biomass)'] == 'W']
+    # Hard-coded list of plants that should be colored blue
+    # green_plants = [
+    #     "Renova",
+    #     "Hogdalenverket", 
+    #     "Sjolunda",
+    #     "Korstaverket",
+    #     "Garstadverket",
+    #     "Vasteras KVV",
+    #     "Handeloverket",
+    #     "Bolanderna",
+    #     "Filbornaverket",
+    #     "Bristaverket"
+    # ]
+    green_plants = [
+        "Renova",
+        "Hogdalenverket", 
+        "Sjolunda",
+        # "Korstaverket",
+        "Garstadverket",
+        "Vasteras KVV",
+        # "Handeloverket",
+        # "Bolanderna",
+        "Filbornaverket",
+        # "Bristaverket"
+    ]
+    # green_plants = []
     
     # Sort plants by Total value and identify the 10 largest
-    waste_plants_sorted = waste_plants.sort_values('Total', ascending=False)
-    top_10_plants = waste_plants_sorted.head(10)
+    plants_sorted = plants_df.sort_values('Total', ascending=False)
+    top_10_plants = plants_sorted.head(10)
     
-    # Plot plants with different colors based on size
-    for _, plant in waste_plants.iterrows():
+    # Print the names of the 10 largest plants
+    print("\nTop 10 largest plants:")
+    for i, (_, plant) in enumerate(top_10_plants.iterrows(), 1):
+        print(f"{i:2d}. {plant['Name']}: {plant['Total']:.1f} ktCO2/yr")
+    
+    # Plot all plants with different colors based on hard-coded list
+    for _, plant in plants_df.iterrows():
         lat, lon = plant['Latitude'], plant['Longitude']
         total_value = plant['Total']
         # Scale the bubble size - adjust the scaling factor as needed
-        bubble_size = total_value * 0.0010  # Much smaller scaling factor to fit bubbles on map
+        bubble_size = total_value * 1.2  # Much smaller scaling factor to fit bubbles on map
         
-        # Color the 10 largest plants deepskyblue, rest grey
-        if plant.name in top_10_plants.index:
-            color = 'deepskyblue'
+        # Color plants based on hard-coded list: blue if in list, grey otherwise
+        if plant['Name'] in green_plants:
+            color = 'mediumseagreen'
             alpha = 0.8
         else:
             color = 'grey'
@@ -94,8 +117,8 @@ def plot_europe():
     # Add legend
     ax.scatter([], [], marker='D', s=100, color='crimson', edgecolor='black', linewidth=1, label='Hubs')
     ax.scatter([], [], marker='D', s=100, color='maroon', edgecolor='black', linewidth=1, label='Storage')
-    ax.scatter([], [], s=200, color='deepskyblue', alpha=0.8, edgecolor='black', linewidth=0.5, label='10 largest waste-CHP')
-    ax.scatter([], [], s=200, color='grey', alpha=0.4, edgecolor='black', linewidth=0.5, label='Other waste-CHP')
+    ax.scatter([], [], s=200, color='mediumseagreen', alpha=0.8, edgecolor='black', linewidth=0.5, label='Selected plants')
+    ax.scatter([], [], s=200, color='grey', alpha=0.4, edgecolor='black', linewidth=0.5, label='Other plants')
     ax.legend(loc='upper left')
     
     # Save the figure at 600 DPI

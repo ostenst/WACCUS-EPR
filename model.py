@@ -793,34 +793,36 @@ def plan_CCS(plant, x, transport_costs, sea_distances):
     # Estimate OPEX
     OPEXfix = (CAPEX*1000 * x["OPEXfix"]) / (mcaptured/1000*3600 * x["FLH"])  # [EUR/t]
     OPEXmakeup = x["makeup"] * x["camine"]                                    # [EUR/t]
-    OPEXenergy = (Ppenalty*x["celc"] + Qpenalty*x["celc"]*x["cheat"]) / (mcaptured/1000*3600 * x["FLH"])  # [EUR/t]
+    OPEXenergy = (Ppenalty*1000*x["celc"] + Qpenalty*1000*x["celc"]*x["cheat"]) / (mcaptured/1000*3600 * x["FLH"])  # [EUR/t]
     OPEX = OPEXfix + OPEXmakeup + OPEXenergy     
-    print(" ")
-    print("OPEX FIXED IS VERY HIGH?")
-    print(f"OPEXfix: {OPEXfix:.2f} EUR/tCO2")
-    print(f"OPEXmakeup: {OPEXmakeup:.2f} EUR/tCO2")
-    print(f"OPEXenergy: {OPEXenergy:.2f} EUR/tCO2")
-    print(f"OPEX: {OPEX:.2f} EUR/tCO2")
 
     # Construct a reversed auction bid
-    CAC = levelized_CAPEX + OPEX + transport_cost                        # [EUR/t]
+    CAC = OPEX + levelized_CAPEX + transport_cost                        # [EUR/t]
+
     fossil = plant["Fossil"] / plant["Total"]                                 # [tfossil/t] share of fossil CO2
     biogenic = 1 - fossil                                                     # [tbiogenic/t] share of biogenic CO2
     incentives = fossil * x["ETS"] + biogenic * x["CRC"]                      # [EUR/t]
-    print(" ")
-    print(f"CAC: {CAC:.2f} EUR/tCO2")
-    print(f"levelized_CAPEX: {levelized_CAPEX:.2f} EUR/tCO2")
-    print(f"OPEX: {OPEX:.2f} EUR/tCO2")
-    print(f"transport_cost: {transport_cost:.2f} EUR/tCO2")
-    print(f"incentives: {incentives:.2f} EUR/tCO2")
-    print(f"fossil: {fossil * x['ETS']:.2f} EUR/tCO2")
-    print(f"biogenic: {biogenic * x['CRC']:.2f} EUR/tCO2")
-    bid = CAC - incentives                                                     # [EUR/t]
+    bid = CAC - incentives          
+
+    # Store detailed cost data
+    cost_details = {
+        'OPEXfix': OPEXfix,
+        'OPEXmakeup': OPEXmakeup,
+        'OPEXenergy': OPEXenergy,
+        'OPEX': OPEX,
+        'levelized_CAPEX': levelized_CAPEX,
+        'transport_cost': transport_cost,
+        'CAC': CAC,
+        'fossil_incentive': fossil * x['ETS'],
+        'biogenic_incentive': biogenic * x['CRC'],
+        'incentives': incentives,
+        'bid': bid
+    }
 
     FCCS = mcaptured*10**-6*3600 * x["FLH"] * fossil                           # [ktCO2/yr]
     BECCS = mcaptured*10**-6*3600 * x["FLH"] * biogenic                        # [ktCO2/yr]
 
-    return FCCS, BECCS, bid, Ppenalty, Qpenalty
+    return FCCS, BECCS, bid, Ppenalty, Qpenalty, cost_details
 
 def plot_transport_costs(transport_costs, r2_scores, df, show_plot=False, max_distance=3000):
     """
@@ -1102,6 +1104,107 @@ def plot_product_increases(products_df):
     
     return fig
 
+def plot_plant_cost_breakdown(ccs_plants):
+    """
+    Create a cost breakdown plot for CCS plants showing individual cost components and incentives.
+    
+    Args:
+        ccs_plants (list): List of CCS plant dictionaries with cost_details
+    """
+    if not ccs_plants:
+        return None
+        
+    # Define the specific cost categories to plot (positive y-axis)
+    positive_categories = ['OPEXfix', 'OPEXmakeup', 'OPEXenergy', 'levelized_CAPEX', 'transport_cost']
+    
+    # Define incentive categories to plot (negative y-axis)
+    negative_categories = ['fossil_incentive', 'biogenic_incentive']
+    
+    # Create the plot
+    fig3, ax = plt.subplots(figsize=(15, 8))
+    
+    # Set up the x-axis positions
+    plant_names = [plant['name'] for plant in ccs_plants]
+    x = np.arange(len(plant_names))
+    width = 0.8  # Full width for each plant bar
+    
+    # Define colors for different cost categories (reds and yellows)
+    colors = ['#d73027', '#f46d43', '#fdae61', '#fee08b', '#ffffbf']  # Red to yellow gradient
+    
+    # Create stacked bars for positive costs (above x-axis)
+    bottom = np.zeros(len(plant_names))
+    for i, (category, color) in enumerate(zip(positive_categories, colors)):
+        values = [plant['cost_details'][category] for plant in ccs_plants]
+        ax.bar(x, values, width, label=category, color=color, bottom=bottom)
+        bottom += values
+    
+    # Create bars for incentives (below x-axis)
+    bottom = np.zeros(len(plant_names))  # Start at 0 for negative stacking
+    incentive_colors = ['#1a9850', '#66c2a5']  # Green to blue gradient
+    for i, (category, color) in enumerate(zip(negative_categories, incentive_colors)):
+        values = [-plant['cost_details'][category] for plant in ccs_plants]  # Make negative for display
+        ax.bar(x, values, width, label=category, color=color, bottom=bottom)
+        bottom += values  # This makes bottom more negative for next bar
+    
+    # Customize the plot with font size 12
+    ax.set_xlabel('Plants', fontsize=12)
+    ax.set_ylabel('Cost [EUR/tCO2]', fontsize=12)
+    ax.set_title('Cost Breakdown by Plant (CCS Plants Only)', fontsize=12)
+    ax.set_xticks(x + width/2)
+    ax.set_xticklabels(plant_names, rotation=45, ha='right', fontsize=12)
+    ax.tick_params(axis='y', labelsize=12)
+    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=12)
+    ax.grid(True, linestyle='--', alpha=0.3)
+    
+    # Add a horizontal line at y=0
+    ax.axhline(y=0, color='black', linestyle='-', alpha=0.5)
+    
+    # Add value labels for each cost component in the stacked bars
+    for i, plant in enumerate(ccs_plants):
+        if i != len(ccs_plants) - 1:
+            continue
+        # Add labels for positive costs (above x-axis)
+        bottom = 0
+        for j, category in enumerate(positive_categories):
+            value = plant['cost_details'][category]
+            if value > 0:  # Only add label if value is significant
+                ax.text(x[i] + width/2, bottom + value/2, 
+                       f'{int(round(value))}', ha='center', va='center', 
+                       color='black', fontsize=12, fontweight='bold')
+            bottom += value
+        
+        # Add labels for incentives (below x-axis)
+        bottom = 0
+        for j, category in enumerate(negative_categories):
+            value = -plant['cost_details'][category]  # Make negative for display
+            if abs(value) > 0:  # Only add label if value is significant
+                ax.text(x[i] + width/2, bottom + value/2, 
+                       f'{int(round(abs(plant["cost_details"][category])))}', ha='center', va='center', 
+                       color='black', fontsize=12, fontweight='bold')
+            bottom += value
+        
+        # Add total cost label on top of the positive bar
+        total_positive_cost = sum(plant['cost_details'][cat] for cat in positive_categories)
+        ax.text(x[i] + width/2, total_positive_cost, 
+               f'{total_positive_cost:.1f}', ha='center', va='bottom', 
+               color='black', fontsize=12, fontweight='bold')
+    
+    # Add bid values as black dots at their actual bid values on the y-axis
+    for i, plant in enumerate(ccs_plants):
+        # Plot the bid value as a black dot at the actual bid value, centered on the bar
+        ax.scatter(x[i], plant['bid'], 
+                  color='gray', s=100, zorder=5, marker='o')
+        
+        # Add bid value label next to the dot
+        ax.text(x[i] + 0.1, plant['bid'], 
+               f'{round(plant["bid"]):.1f}', ha='left', va='center', 
+               color='gray', fontsize=12, fontweight='bold')
+    
+    plt.tight_layout()
+    plt.savefig('plant_cost_breakdown.png', dpi=600, bbox_inches='tight')
+    
+    return fig3
+
 def WACCUS_EPR( 
     # uncertainties
     mKN39 = 884393,     # [t/a] plastic products mappable under KN39 [IVL]
@@ -1118,8 +1221,9 @@ def WACCUS_EPR(
     FLH = 8000,
     dr = 0.075,
     t = 25,
-    FOAK = 0.45/2,      # [-] [Beiron, 2024] applies to CO2 capture and conditioning 
-    OPEXfix = 0.05,     # [-] [Beiron, 2024] % of CAPEX 
+    # FOAK = 0.45/2,      # [-] [Beiron, 2024] applies to CO2 capture and conditioning 
+    FOAK = 0, # FOR EON MEETING
+    OPEXfix = 0.03,     # [-] [Beiron, 2024] % of CAPEX no, calculated from Ramboll BECCS Malmö [2-5%]
     camine = 2000,      # [EUR/m3] [Beiron, 2024]
     celc = 60,          # [EUR/MWh]
     cheat = 0.80,       # [% of elc]
@@ -1136,7 +1240,7 @@ def WACCUS_EPR(
     destination = "oygarden",  # ["oygarden", "kalundborg"]
 
     # levers 
-    tax = 200,          # [EUR/tCO2]
+    tax = 100,          # [EUR/tCO2]
 
     # constants
     plants = None,
@@ -1194,10 +1298,35 @@ def WACCUS_EPR(
     }
 
     # RQ1: tax revenues
+
+    # Plot fund values as a function of tax level for two cases
+    tax_levels = np.linspace(50, 300, 100)
+    mass_taxed_1 = 1.2
+    mass_taxed_2 = 0.6 # [Mtpl /yr]
+
+    fund_1 = mass_taxed_1 * fraction * 3.66 * tax_levels  # [MEUR/yr]
+    fund_2 = mass_taxed_2 * fraction * 3.66 * tax_levels  # [MEUR/yr]
+
+    plt.figure()
+    plt.plot(tax_levels, fund_1, label=f"mass_taxed = {mass_taxed_1:.1f} Mt plastic/yr")
+    plt.plot(tax_levels, fund_2, label=f"mass_taxed = {mass_taxed_2:.1f} Mt plastic/yr")
+    plt.axhline(120, color='red', linestyle='--', label='120 MEUR/yr = Exergi subsidy')
+    plt.xlabel("Tax level [EUR/tCO2]", fontsize=14)
+    plt.ylabel("Fund [MEUR/yr]", fontsize=14)
+    plt.title("Fund as function of tax level", fontsize=14)
+    plt.legend(fontsize=14)
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig('fund_potential.png', dpi=600, bbox_inches='tight')
+
     mass_taxed = mKN39 * (1 - recyclable) * fraction # [tC/yr]
     mass_CO2 = mass_taxed * 3.66 # [tCO2/yr]
     fund = mass_CO2 * tax # [EUR/yr]
     fund /= 10**6 # [MEUR/yr]
+
+    # Forcing an example for EON:
+    mass_CO2 = 1.2 * fraction * 3.66 # [MtCO2/yr]
+    fund = mass_CO2 * tax # [MEUR/yr]
 
     products_df = pd.read_csv("data/products.csv")
     products_df['tax_amount'] = products_df['weight per unit [kg]']/1000 * (products_df['fossil carbon content [mass%]']/100) * 3.66 * tax  # [EUR]
@@ -1216,13 +1345,13 @@ def WACCUS_EPR(
         CCS_names = []
     elif case == "CCS":
         CCU_names = []
-        CCS_names = ["Renova","SAKAB","Filbornaverket","Garstadverket","Sjolunda","Handeloverket","Bristaverket","Vasteras KVV","Hogdalenverket","Bolanderna"]
+        CCS_names = ["Renova","Hogdalenverket","Sjolunda","Korstaverket","Garstadverket","Vasteras KVV","Handeloverket","Bolanderna","Filbornaverket","Bristaverket"]
 
     # Collect all bids
     bids = []
     for _, plant in plants.iterrows():
         if plant["Name"] in CCS_names:
-            FCCS, BECCS, bid, Ppenalty, Qpenalty = plan_CCS(plant, x, transport_costs, sea_distances)
+            FCCS, BECCS, bid, Ppenalty, Qpenalty, cost_details = plan_CCS(plant, x, transport_costs, sea_distances)
             bids.append({
                 'name': plant['Name'],
                 'type': 'CCS',
@@ -1230,7 +1359,8 @@ def WACCUS_EPR(
                 'FCCS': FCCS,
                 'BECCS': BECCS,
                 'Ppenalty': Ppenalty,
-                'Qpenalty': Qpenalty
+                'Qpenalty': Qpenalty,
+                'cost_details': cost_details
             })
 
         if plant["Name"] in CCU_names:
@@ -1260,7 +1390,7 @@ def WACCUS_EPR(
     for bid in bids:
         if bid['type'] == 'CCS':
             requested_amount = bid['bid'] * (bid['FCCS'] + bid['BECCS']) * 1000 /(10**6) # [EUR/tCO2 * ktCO2/yr => MEUR/yr]
-            awarded = requested_amount <= remaining_fund
+            awarded = requested_amount <= remaining_fund # [MEUR/yr]
             if awarded:
                 remaining_fund -= requested_amount
             awarded_plants.append({
@@ -1275,7 +1405,8 @@ def WACCUS_EPR(
                 'Qpenalty': bid['Qpenalty'],
                 'CCU': 0,
                 'Qmethanol': 0,
-                'amount': requested_amount if awarded else 0
+                'amount': requested_amount if awarded else 0,
+                'cost_details': bid.get('cost_details', {})
             })
         else:  # CCU
             requested_amount = bid['bid'] * bid['CCU'] * 1000 /(10**6)
@@ -1330,7 +1461,8 @@ def WACCUS_EPR(
         'total_Qpenalty': total_Qpenalty,
         'total_Qmethanol': total_Qmethanol,
         'remaining_fund': remaining_fund,
-        'product_increases': products_df[['name', 'price per unit [EUR]', 'tax_amount', 'price_increase_percent']].to_dict('records')
+        'product_increases': products_df[['name', 'price per unit [EUR]', 'tax_amount', 'price_increase_percent']].to_dict('records'),
+        'bid_data': bids,
     }
     return output
 
@@ -1361,8 +1493,8 @@ if __name__ == "__main__":
     # Run the model
     output = WACCUS_EPR(
         plants=plants, 
-        k=k, 
-        case="CCU", 
+        k=k,                          # For CAPEX=CAPEX_ref⋅(mCO2/mCO2_ref)^k
+        case="CCS", 
         transport_costs=transport_costs,
         sea_distances=sea_distances,  # Pass pre-calculated distances dict
         thermo_props=thermo_props     # Pass thermodynamic properties
@@ -1371,6 +1503,15 @@ if __name__ == "__main__":
     # Create and save the plots
     fig1 = plot_awarded_metrics(output)
     fig2 = plot_product_increases(pd.DataFrame(output['product_increases']))
+    
+    # Plot cost breakdown for each plant
+    bid_data = output['bid_data']
+    
+    # Filter for CCS plants that have cost_details
+    ccs_plants = [bid for bid in bid_data if bid['type'] == 'CCS' and 'cost_details' in bid]
+    positive_categories = ['OPEXfix', 'OPEXmakeup', 'OPEXenergy', 'levelized_CAPEX', 'transport_cost']    
+    negative_categories = ['fossil_incentive', 'biogenic_incentive']
+    fig3 = plot_plant_cost_breakdown(ccs_plants)
     
     print("Most CCU plants are near profitable already - consider adding higher electrolyzer costs etc., also no ETS incentive?")
     print("I should verify the methanol production - is it reasonable really?")
