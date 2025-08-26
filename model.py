@@ -663,6 +663,7 @@ def plan_CCU(plant, x, plot_single=True):
     # print(f"KPI5: {KPI5:.2f}")
 
     # Estimate CAPEX and OPEX of all units
+    print("-- START FROM HERE, VERIFY COSTS -- ")
     CAPEX, levelized_CAPEX = estimate_CAPEX(mcaptured, x)  # [kEUR, EUR/tCO2] NOTE: Includes compression/liq CAPEX...
     # CAPEX_H2 = 550/1000 * PH2 # [kEUR] [Danish] NOTE: Looks wrong, adjust to Jacobsson MSc Table2.1
     CAPEX_H2 = 375 * PH2/1000 # [kEUR/MWH2] NOTE: verify if it is per MWH2 or MWel?
