@@ -71,9 +71,9 @@ def plot_europe():
         # "Korstaverket",
         "Garstadverket",
         "Vasteras KVV",
-        # "Handeloverket",
+        "Handeloverket",
         # "Bolanderna",
-        "Filbornaverket",
+        # "Filbornaverket",
         # "Bristaverket"
     ]
     # green_plants = []

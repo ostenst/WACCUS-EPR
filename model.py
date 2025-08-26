@@ -1153,7 +1153,7 @@ def plot_plant_cost_breakdown(ccs_plants):
     ax.set_xticks(x + width/2)
     ax.set_xticklabels(plant_names, rotation=45, ha='right', fontsize=12)
     ax.tick_params(axis='y', labelsize=12)
-    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=12)
+    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=12, reverse=True)
     ax.grid(True, linestyle='--', alpha=0.3)
     
     # Add a horizontal line at y=0
@@ -1229,7 +1229,7 @@ def WACCUS_EPR(
     cheat = 0.80,       # [% of elc]
     CRC = 100,          # [EUR/tCO2]
     ETS = 80,           # [EUR/tCO2]
-    pmethanol = 625,    # [EUR/t]
+    pmethanol = 625,    # [EUR/t] NOTE: CHECK CCU THESIS FOR PRICE ESTIMATES, e.g. 1750 EUR/t
 
     lulea = 1,          # [1,2,3] [Mt/yr]
     sundsvall = 1,      # [1,2,3] [Mt/yr]
@@ -1240,7 +1240,7 @@ def WACCUS_EPR(
     destination = "oygarden",  # ["oygarden", "kalundborg"]
 
     # levers 
-    tax = 100,          # [EUR/tCO2]
+    tax = 110,          # [EUR/tCO2]
 
     # constants
     plants = None,
