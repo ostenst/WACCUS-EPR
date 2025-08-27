@@ -475,7 +475,7 @@ def plot_CCU_combined(plant, P, Qdh, Preb, Pcapture, PH2, Wcomp_CO2, Wcomp_H2, Q
     power_components = {
         'Reboiler': -Preb,
         'Power Capture Plant': -Pcapture,
-        'H2 Production': -PH2/1000,
+        'H2 Production': -PH2,
         'CO2 Compression': -Wcomp_CO2,
         'H2 Compression': -Wcomp_H2
     }
@@ -571,7 +571,7 @@ def plot_CCU_combined(plant, P, Qdh, Preb, Pcapture, PH2, Wcomp_CO2, Wcomp_H2, Q
     
     return fig
 
-def plan_CCU(plant, x, plot_single=True):
+def plan_CCU(plant, x, plot_single=False):
     # burn fuel
     mfuel = plant["Qwaste"] / (x["LHV"]/3600) /3600  # [kgf/s]
     mCO2 = mfuel* x["Ccontent"] * 44/12              # [kgCO2/s]
@@ -604,9 +604,9 @@ def plan_CCU(plant, x, plot_single=True):
     Hi = 241.82             # [kJ/molH2] [Formelsamling]
     nCO2 = mcaptured/44     # [kmol/s]
     nH2 = nCO2 * 3          # [kmol/s] needed
-    QH2 = nH2*1000 * Hi     # [kW] 
-    PH2 = QH2/0.699         # [kW] Table2.1 MSc Jacobsson & Palmgren, 2025
-    Qrec_H2 = 0.154 * PH2   # [kW] [AEL tech, Fig2.1 MSc Jacobsson & Palmgren, 2025] OR [Danish Renwable Fuels 100MW AEC] NOTE: Optimistic
+    QH2 = nH2 * Hi          # [MW] 
+    PH2 = QH2/0.699         # [MW] Table2.1 MSc Jacobsson & Palmgren, 2025
+    Qrec_H2 = 0.154 * PH2   # [MW] [AEL tech, Fig2.1 MSc Jacobsson & Palmgren, 2025] OR [Danish Renwable Fuels 100MW AEC] NOTE: Optimistic
 
     # compress the H2
     mH2 = nH2 * 2           # [kg/s] 
@@ -629,23 +629,25 @@ def plan_CCU(plant, x, plot_single=True):
     Qcool_H2 = sum(Qcool_list)  # [MW]
 
     # produce methanol and extra DH - check Danish Agency for method - we treat the whole synthesis plant as a single unit
-    Qsteam_synthesis = 0.08/(1-0.08) * QH2/1000 # [MW] [Danish Renewable Fuels Fig3, section 5.2 Methanol from Hydrogen and Carbon Dioxide]
-    Qmethanol = 0.78 * (QH2/1000 + Qsteam_synthesis) # [MW]
-    Qdistill = 0.20 * (QH2/1000 + Qsteam_synthesis) # [MW] NOTE: Optimistic assumption on heat recovery, from condensers at distillation
-    Qloss = 0.02 * (QH2/1000 + Qsteam_synthesis) # [MW] 
+    Qsteam_synthesis = 0.08/(1-0.08) * QH2 # [MW] [Danish Renewable Fuels Fig3, section 5.2 Methanol from Hydrogen and Carbon Dioxide]
+    Qmethanol = 0.78 * (QH2 + Qsteam_synthesis) # [MW]
+    Qdistill = 0.20 * (QH2 + Qsteam_synthesis) # [MW] NOTE: Optimistic assumption on heat recovery, from condensers at distillation
+    Qloss = 0.02 * (QH2 + Qsteam_synthesis) # [MW] 
+    LHV_methanol = 19.8      # [MJ/kg] [Formelsamling]
+    m_methanol = Qmethanol/LHV_methanol /1000*3600*24 # [t/day]
 
     # penalize CHP and recover Qdh
     P = plant["P"] * (1 - Qreb/plant["Qwaste"] - Qsteam_synthesis/plant["Qwaste"])      # assuming live steam is used for reboiler AND synthesis plant
     Preb = plant["P"]*(Qreb+Qsteam_synthesis)/plant["Qwaste"] # power lost to reboiler?
-    P = P - Pcapture - PH2/1000 - Wcomp_CO2 - Wcomp_H2
+    P = P - Pcapture - PH2 - Wcomp_CO2 - Wcomp_H2
 
     Qdh = plant["Qdh"] * (1 - Qreb/plant["Qwaste"] - Qsteam_synthesis/plant["Qwaste"])
     Qdhreb = plant["Qdh"]*(Qreb+Qsteam_synthesis)/plant["Qwaste"]
-    Qdh = Qdh + Qcool_CO2 + Qcool_H2 + (Qhex + Qrec_H2/1000 + Qdistill)*x["heat_optimism"] # [MW]
+    Qdh = Qdh + Qcool_CO2 + Qcool_H2 + (Qhex + Qrec_H2 + Qdistill)*x["heat_optimism"] # [MW] the cooling is NECESSARY, the others are not.
 
-    Ppenalty = (plant["P"] - P) * x["FLH"] /1000          # [GWh/yr] probably very positive
-    Qpenalty = (plant["Qdh"] - Qdh) * x["FLH"] /1000     # [GWh/yr] probably negative
-    Qmethanol = Qmethanol * x["FLH"] /1000               # [GWh/yr] positive
+    Ppenalty = (plant["P"] - P) * x["FLH"]        # [MWh/yr] probably very positive
+    Qpenalty = (plant["Qdh"] - Qdh) * x["FLH"]      # [MWh/yr] probably negative
+    Qmethanol = Qmethanol * x["FLH"]                # [MWh/yr] positive
 
     # print("These KPIs are similar to Beiron, if no recovery from Qhex, Qrec_H2, Qdistill:")
     # KPI1 = Qmethanol/x["FLH"]*1000 / (plant["Qwaste"] + (-P)) # [MW/MW]
@@ -665,45 +667,48 @@ def plan_CCU(plant, x, plot_single=True):
     # Estimate CAPEX and OPEX of all units
     print("-- START FROM HERE, VERIFY COSTS -- ")
     CAPEX, levelized_CAPEX = estimate_CAPEX(mcaptured, x)  # [kEUR, EUR/tCO2] NOTE: Includes compression/liq CAPEX...
-    # CAPEX_H2 = 550/1000 * PH2 # [kEUR] [Danish] NOTE: Looks wrong, adjust to Jacobsson MSc Table2.1
-    CAPEX_H2 = 375 * PH2/1000 # [kEUR/MWH2] NOTE: verify if it is per MWH2 or MWel?
+    OPEXfix = x["OPEXfix"] * CAPEX # [kEUR/yr]
+    CAPEX_H2 = 550 * PH2 # [kEUR] [Danish Agency Excel Renewable Fuels AEC100MW]  550kEUR/MWe
     OPEX_H2 = 0.04 * CAPEX_H2 # [kEUR/yr] 
-    CAPEX_synthesis = 1.09*1000 * Qmethanol/x["FLH"] # [kEUR] [Beiron, Grahn, no Danish! Includes destillation probably]
-    OPEX_synthesis = 0.05 * CAPEX_synthesis # [kEUR/yr]
+
+    # CAPEX_synthesis = 1.09*1000 * Qmethanol/x["FLH"] # [kEUR] # Danish Renewable Fuels PDF has a power function of CAPEX_synthesis. Fig4, p.186. 
+    CAPEX_synthesis = 1.8749 * m_methanol ** -0.315 *1000 # quoted accuracy: +-50%, at kEUR2020 (so use CEPCI?)
+    OPEX_synthesis = 0.05 * CAPEX_synthesis # [kEUR/yr] However, these arrive at the same cost roughly: [Beiron, Grahn! Includes destillation probably]
 
     levelized_CAPEX_H2 = levelize(CAPEX_H2, mcaptured, x)
     levelized_CAPEX_synthesis = levelize(CAPEX_synthesis, mcaptured, x)
     levelized_CAPEX_CO2_comp = levelize(cost_CO2/1000, mcaptured, x)  # Convert cost_CO2 from EUR to kEUR
     levelized_CAPEX_H2_comp = levelize(cost_H2/1000, mcaptured, x)    # Convert cost_H2 from EUR to kEUR
-    print(levelized_CAPEX, levelized_CAPEX_H2, levelized_CAPEX_synthesis, levelized_CAPEX_CO2_comp, levelized_CAPEX_H2_comp)
 
     annual_CO2 = mcaptured/1000*3600 * x["FLH"]  # [tCO2/yr]
+    levelized_OPEXfix = OPEXfix / annual_CO2 * 1000  # [EUR/tCO2]
     levelized_OPEX_H2 = OPEX_H2 / annual_CO2 * 1000  # [EUR/tCO2]
     levelized_OPEX_synthesis = OPEX_synthesis / annual_CO2 * 1000  # [EUR/tCO2]
 
     # Summarize and bid
-    CAC = levelized_CAPEX + levelized_CAPEX_H2 + levelized_CAPEX_synthesis + levelized_OPEX_H2 + levelized_OPEX_synthesis + levelized_CAPEX_CO2_comp + levelized_CAPEX_H2_comp
+    CAC = levelized_CAPEX + levelized_CAPEX_H2 + levelized_CAPEX_synthesis + levelized_OPEXfix + levelized_OPEX_H2 + levelized_OPEX_synthesis + levelized_CAPEX_CO2_comp + levelized_CAPEX_H2_comp
+    print("Notably, only capture plant and H2 CAPEX/OPEX matters: other costs are miniscule")
+    print(levelized_CAPEX, levelized_CAPEX_H2, levelized_CAPEX_synthesis, levelized_OPEXfix, levelized_OPEX_H2, levelized_OPEX_synthesis, levelized_CAPEX_CO2_comp, levelized_CAPEX_H2_comp)
 
-    costs_power = Ppenalty*1000*x["celc"] / annual_CO2 # [EUR/tCO2] 
-    revenues_heat = - Qpenalty*1000*x["celc"]*x["cheat"] / annual_CO2 # [EUR/tCO2] 
-    revenues_methanol = (Qmethanol*1000 * 3600 / 21.1 /1000)*x["pmethanol"] / annual_CO2 # [EUR/tCO2] [Beiron, Qmethanol[MW LHV]=> tons of methanol] 
+    costs_power = Ppenalty*x["celc"] / annual_CO2 # [EUR/tCO2] 
+    revenues_heat = abs(Qpenalty)*x["celc"]*x["cheat"] / annual_CO2 # [EUR/tCO2] 
+    revenues_methanol = Qmethanol*3600/LHV_methanol /1000 * x["pmethanol"]  / annual_CO2 #[EUR/tCO2]
     energy_revenues = revenues_heat + revenues_methanol - costs_power # [EUR/tCO2]
     print(f"costs_power: {costs_power:.2f} EUR/tCO2")
     print(f"revenues_heat: {revenues_heat:.2f} EUR/tCO2")
     print(f"revenues_methanol: {revenues_methanol:.2f} EUR/tCO2")
     print(f"energy_revenues: {energy_revenues:.2f} EUR/tCO2")
 
-    fossil = plant["Fossil"] / plant["Total"]                               # [tfossil/t] share of fossil CO2
     bid = CAC - energy_revenues # [EUR/tCO2]
-    print(f"CAC: {CAC:.2f} EUR/tCO2")
-    print(f"ETS: {x['ETS']*fossil:.2f} EUR/tCO2")
+    print(f"\nCAC: {CAC:.2f} EUR/tCO2")
     print(f"energy_revenues: {energy_revenues:.2f} EUR/tCO2")
     print(f"bid: {bid:.2f} EUR/tCO2")
 
+    fossil = plant["Fossil"] / plant["Total"]                           # [tfossil/t] share of fossil CO2
     biogenic = 1 - fossil  
-    FCCU = mcaptured*10**-6*3600 * x["FLH"] * fossil                           # [ktCO2/yr]
-    BCCU = mcaptured*10**-6*3600 * x["FLH"] * biogenic                        # [ktCO2/yr]
-    CCU = FCCU + BCCU                                                         # [ktCO2/yr]
+    FCCU = annual_CO2 * fossil /1000                          # [ktCO2/yr]
+    BCCU = annual_CO2 * biogenic /1000                        # [ktCO2/yr]
+    # CCU = FCCU + BCCU                                                         # [ktCO2/yr]
 
     if plot_single:
         fig1 = plot_CCU_CHP(
@@ -741,7 +746,7 @@ def plan_CCU(plant, x, plot_single=True):
             Qmethanol=Qmethanol/x["FLH"]*1000
         )
 
-    return CCU, bid, Ppenalty, Qpenalty, Qmethanol
+    return FCCU, BCCU, bid, Ppenalty, Qpenalty, Qmethanol
 
 def plan_CCS(plant, x, transport_costs, sea_distances):
     # burn fuel
@@ -823,7 +828,7 @@ def plan_CCS(plant, x, transport_costs, sea_distances):
     FCCS = mcaptured*10**-6*3600 * x["FLH"] * fossil                           # [ktCO2/yr]
     BECCS = mcaptured*10**-6*3600 * x["FLH"] * biogenic                        # [ktCO2/yr]
 
-    return FCCS, BECCS, bid, Ppenalty, Qpenalty, cost_details
+    return FCCS, BECCS, bid, Ppenalty*1000, Qpenalty*1000, cost_details # [MWh/yr]
 
 def plot_transport_costs(transport_costs, r2_scores, df, show_plot=False, max_distance=3000):
     """
@@ -1023,42 +1028,51 @@ def plot_awarded_metrics(output):
     ax2 = ax1.twinx()
     
     # Data for plotting
-    metrics = ['FCCS+BECCS', 'CCU', 'Ppenalty', 'Qpenalty', 'Qmethanol']
-    values = [output['total_FCCS_BECCS'], output['total_CCU'], 
-              output['total_Ppenalty'], output['total_Qpenalty'], 
-              output['total_Qmethanol']]
+    metrics = ['FCCS', 'BECCS', 'FCCU', 'BCCU', 'Ppenalty', 'Qpenalty', 'Qmethanol']
+    values = [output['total_FCCS'], output['total_BECCS'], output['total_FCCU'], output['total_BCCU'], 
+              output['total_Ppenalty']/1000, output['total_Qpenalty']/1000, # To GWh
+              output['total_Qmethanol']/1000]
     
     # Colors for bars
     colors = ['#1f77b4', '#2ca9b8', '#d62728', '#ff7f0e', '#9467bd']
     
-    # Create bars
-    bars = ax1.bar(metrics, values, color=colors)
+    # Create bars - split between primary and secondary axes
+    primary_metrics = ['FCCS', 'BECCS', 'FCCU', 'BCCU']
+    secondary_metrics = ['Ppenalty', 'Qpenalty', 'Qmethanol']
+    
+    # Plot primary metrics on ax1
+    primary_values = [output['total_FCCS'], output['total_BECCS'], output['total_FCCU'], output['total_BCCU']]
+    primary_colors = ['#1f77b4', '#2ca9b8', '#d62728']
+    bars1 = ax1.bar(primary_metrics, primary_values, color=primary_colors, alpha=0.8)
+    
+    # Plot secondary metrics on ax2
+    secondary_values = [output['total_Ppenalty']/1000, output['total_Qpenalty']/1000, output['total_Qmethanol']/1000]
+    secondary_colors = ['#ff7f0e', '#9467bd', '#8c564b']
+    bars2 = ax2.bar(secondary_metrics, secondary_values, color=secondary_colors, alpha=0.8)
     
     # Set labels and title
     ax1.set_xlabel('Metrics')
     ax1.set_ylabel('CO2 [ktCO2/yr]', color='#1f77b4')
     ax2.set_ylabel('Energy [GWh/yr]', color='#d62728')
-    plt.title('Awarded Metrics Summary')
-    
-    # Set y-axis limits and colors
-    ax1.tick_params(axis='y', labelcolor='#1f77b4')
-    ax2.tick_params(axis='y', labelcolor='#d62728')
     
     # Add value labels on top of bars
-    for bar in bars:
+    for bar in bars1:
         height = bar.get_height()
         ax1.text(bar.get_x() + bar.get_width()/2., height,
+                f'{height:.1f}',
+                ha='center', va='bottom')
+    for bar in bars2:
+        height = bar.get_height()
+        ax2.text(bar.get_x() + bar.get_width()/2., height,
                 f'{height:.1f}',
                 ha='center', va='bottom')
     
     # Add grid
     ax1.grid(True, linestyle='--', alpha=0.3)
+    ax2.grid(True, linestyle='--', alpha=0.3)
     
     # Adjust layout
     plt.tight_layout()
-    
-    # Save figure
-    plt.savefig('awarded_metrics.png', dpi=600, bbox_inches='tight')
     
     return fig
 
@@ -1222,12 +1236,12 @@ def WACCUS_EPR(
     FLH = 8000,
     dr = 0.075,
     t = 25,
-    # FOAK = 0.45/2,      # [-] [Beiron, 2024] applies to CO2 capture and conditioning 
-    FOAK = 0, # FOR EON MEETING
+    FOAK = 0.45/2,      # [-] [Beiron, 2024] applies to CO2 capture and conditioning 
+    # FOAK = 0, # FOR EON MEETING
     OPEXfix = 0.03,     # [-] [Beiron, 2024] % of CAPEX no, calculated from Ramboll BECCS Malmö [2-5%]
     camine = 2000,      # [EUR/m3] [Beiron, 2024]
     celc = 60,          # [EUR/MWh]
-    cheat = 0.80,       # [% of elc]
+    cheat = 0.75,       # [% of elc]
     CRC = 100,          # [EUR/tCO2]
     ETS = 80,           # [EUR/tCO2]
     pmethanol = 625,    # [EUR/t] NOTE: CHECK CCU THESIS FOR PRICE ESTIMATES, e.g. 1750 EUR/t... NO now they say 700?
@@ -1239,7 +1253,7 @@ def WACCUS_EPR(
     gothenburg = 1,     # [1,2,3] [Mt/yr]
     optimism = False,   # [True, False]
     destination = "oygarden",  # ["oygarden", "kalundborg"]
-    heat_optimism = 1,  # [0,1] assumed % of waste heat that can be recovered to DH
+    heat_optimism = 0,  # [0,1] assumed % of waste heat that can be recovered to DH
 
     # levers 
     tax = 110,          # [EUR/tCO2]
@@ -1331,20 +1345,18 @@ def WACCUS_EPR(
     mass_CO2 = 1.2 * fraction * 3.66 # [MtCO2/yr]
     fund = mass_CO2 * tax # [MEUR/yr]
 
+    # RQ1: product price increases
     products_df = pd.read_csv("data/products.csv")
     products_df['tax_amount'] = products_df['weight per unit [kg]']/1000 * (products_df['fossil carbon content [mass%]']/100) * 3.66 * tax  # [EUR]
     products_df['price_increase_percent'] = (products_df['tax_amount'] / products_df['price per unit [EUR]']) * 100  # [%]
-    
-    print("\nProduct Price Increases:")
-    print(products_df[['name', 'price per unit [EUR]', 'tax_amount', 'price_increase_percent']].to_string())
 
     # RQ2: subsidy costs
     if case == "CCUS":
         CCU_names = ["Renova","SAKAB","Filbornaverket","Garstadverket","Sjolunda"]
         CCS_names = ["Handeloverket","Bristaverket","Vasteras KVV","Hogdalenverket","Bolanderna"]
     elif case == "CCU":
-        # CCU_names = ["Renova","SAKAB","Filbornaverket","Garstadverket","Sjolunda","Handeloverket","Bristaverket","Vasteras KVV","Hogdalenverket","Bolanderna"]
-        CCU_names = ["Renova"]
+        CCU_names = ["Renova","Hogdalenverket","Sjolunda","Korstaverket","Garstadverket","Vasteras KVV","Handeloverket","Bolanderna","Filbornaverket","Bristaverket"]
+        # CCU_names = ["Renova"]
         CCS_names = []
     elif case == "CCS":
         CCU_names = []
@@ -1367,12 +1379,13 @@ def WACCUS_EPR(
             })
 
         if plant["Name"] in CCU_names:
-            CCU, bid, Ppenalty, Qpenalty, Qmethanol = plan_CCU(plant, x)
+            FCCU, BCCU, bid, Ppenalty, Qpenalty, Qmethanol = plan_CCU(plant, x)
             bids.append({
                 'name': plant['Name'],
                 'type': 'CCU',
                 'bid': bid,
-                'CCU': CCU,
+                'FCCU': FCCU,
+                'BCCU': BCCU,
                 'Ppenalty': Ppenalty,
                 'Qpenalty': Qpenalty,
                 'Qmethanol': Qmethanol
@@ -1406,13 +1419,14 @@ def WACCUS_EPR(
                 'FCCS+BECCS': bid['FCCS'] + bid['BECCS'],
                 'Ppenalty': bid['Ppenalty'],
                 'Qpenalty': bid['Qpenalty'],
-                'CCU': 0,
+                'FCCU': 0,
+                'BCCU': 0,
                 'Qmethanol': 0,
                 'amount': requested_amount if awarded else 0,
                 'cost_details': bid.get('cost_details', {})
             })
         else:  # CCU
-            requested_amount = bid['bid'] * bid['CCU'] * 1000 /(10**6)
+            requested_amount = bid['bid'] * (bid['FCCU'] + bid['BCCU']) * 1000 /(10**6)
             awarded = requested_amount <= remaining_fund
             if awarded:
                 remaining_fund -= requested_amount
@@ -1426,7 +1440,8 @@ def WACCUS_EPR(
                 'FCCS+BECCS': 0,
                 'Ppenalty': bid['Ppenalty'],
                 'Qpenalty': bid['Qpenalty'],
-                'CCU': bid['CCU'],
+                'FCCU': bid['FCCU'],
+                'BCCU': bid['BCCU'],
                 'Qmethanol': bid['Qmethanol'],
                 'amount': requested_amount if awarded else 0
             })
@@ -1438,28 +1453,34 @@ def WACCUS_EPR(
     print(f"Remaining fund: {remaining_fund:.2f} MEUR/yr")
     print(f"Number of plants awarded: {len([p for p in awarded_plants if p['awarded']])}")
     print("\nAwarded plants:")
-    print(f"{'Plant Name':<20} {'Type':<6} {'Awarded':<6} {'[EUR/t]':>10} {'[MEUR/yr]':>10} {'FCCS':>10} {'BECCS':>10} {'FCCS+BECCS':>12} {'CCU':>10} {'Ppenalty':>12} {'Qpenalty':>12} {'Qmethanol':>12}")
+    print(f"{'Plant Name':<20} {'Type':<6} {'Awarded':<6} {'[EUR/t]':>10} {'[MEUR/yr]':>10} {'FCCS':>10} {'BECCS':>10} {'FCCS+BECCS':>12} {'FCCU':>10} {'BCCU':>10} {'Ppenalty':>12} {'Qpenalty':>12} {'Qmethanol':>12}")
     print("-" * 140)
     for plant in awarded_plants:
-        print(f"{plant['name']:<20} {plant['type']:<6} {str(plant['awarded']):<6} {plant['bid']:>10.2f} {plant['amount']:>10.2f} {plant['FCCS']:>10.2f} {plant['BECCS']:>10.2f} {plant['FCCS+BECCS']:>12.2f} {plant['CCU']:>10.2f} {plant['Ppenalty']:>12.2f} {plant['Qpenalty']:>12.2f} {plant['Qmethanol']:>12.2f}")
+        print(f"{plant['name']:<20} {plant['type']:<6} {str(plant['awarded']):<6} {plant['bid']:>10.2f} {plant['amount']:>10.2f} {plant['FCCS']:>10.2f} {plant['BECCS']:>10.2f} {plant['FCCS+BECCS']:>12.2f} {plant['FCCU']:>10.2f} {plant['BCCU']:>10.2f} {plant['Ppenalty']:>12.2f} {plant['Qpenalty']:>12.2f} {plant['Qmethanol']:>12.2f}")
 
     # Calculate sums of awarded metrics
-    total_FCCS_BECCS = sum(plant['FCCS+BECCS'] for plant in awarded_plants if plant['awarded'])
-    total_CCU = sum(plant['CCU'] for plant in awarded_plants if plant['awarded'])
+    total_FCCS = sum(plant['FCCS'] for plant in awarded_plants if plant['awarded'])
+    total_BECCS = sum(plant['BECCS'] for plant in awarded_plants if plant['awarded'])
+    total_FCCU = sum(plant['FCCU'] for plant in awarded_plants if plant['awarded'])
+    total_BCCU = sum(plant['BCCU'] for plant in awarded_plants if plant['awarded'])
     total_Ppenalty = sum(plant['Ppenalty'] for plant in awarded_plants if plant['awarded'])
     total_Qpenalty = sum(plant['Qpenalty'] for plant in awarded_plants if plant['awarded'])
     total_Qmethanol = sum(plant['Qmethanol'] for plant in awarded_plants if plant['awarded'])
 
     print("\nTotal awarded metrics:")
-    print(f"FCCS+BECCS: {total_FCCS_BECCS:.2f} ktCO2/yr")
-    print(f"CCU: {total_CCU:.2f} ktCO2/yr")
-    print(f"Ppenalty: {total_Ppenalty:.2f} GWh/yr")
-    print(f"Qpenalty: {total_Qpenalty:.2f} GWh/yr")
-    print(f"Qmethanol: {total_Qmethanol:.2f} GWh/yr")
+    print(f"FCCS: {total_FCCS:.1f} ktCO2/yr")
+    print(f"BECCS: {total_BECCS:.1f} ktCO2/yr")
+    print(f"FCCU: {total_FCCU:.1f} ktCO2/yr")
+    print(f"BCCU: {total_BCCU:.1f} ktCO2/yr")
+    print(f"Ppenalty: {total_Ppenalty/1000:.1f} GWh/yr")
+    print(f"Qpenalty: {total_Qpenalty/1000:.1f} GWh/yr")
+    print(f"Qmethanol: {total_Qmethanol/1000:.1f} GWh/yr")
 
     output = {
-        'total_FCCS_BECCS': total_FCCS_BECCS,
-        'total_CCU': total_CCU,
+        'total_FCCS': total_FCCS,
+        'total_BECCS': total_BECCS,
+        'total_FCCU': total_FCCU,
+        'total_BCCU': total_BCCU,
         'total_Ppenalty': total_Ppenalty,
         'total_Qpenalty': total_Qpenalty,
         'total_Qmethanol': total_Qmethanol,
@@ -1490,14 +1511,14 @@ if __name__ == "__main__":
     # reading plant data and assign these to transport hubs
     plants = pd.read_csv("data/plants.csv")
     plants = assign_hub(plants)
-    print("\nPlant to Hub Assignments:")
-    print(plants[['Name', 'hub', 'distance_to_hub']].to_string())
+    # print("\nWhat plants are assigned to which hub?")
+    # print(plants[['Name', 'hub', 'distance_to_hub']].to_string())
     
     # Run the model
     output = WACCUS_EPR(
         plants=plants, 
         k=k,                          # For CAPEX=CAPEX_ref⋅(mCO2/mCO2_ref)^k
-        case="CCU", 
+        case="CCS", 
         transport_costs=transport_costs,
         sea_distances=sea_distances,  # Pass pre-calculated distances dict
         thermo_props=thermo_props     # Pass thermodynamic properties
@@ -1514,9 +1535,6 @@ if __name__ == "__main__":
     positive_categories = ['OPEXfix', 'OPEXmakeup', 'OPEXenergy', 'levelized_CAPEX', 'transport_cost']    
     negative_categories = ['fossil_incentive', 'biogenic_incentive']
     fig3 = plot_plant_cost_breakdown(ccs_plants)
-    
-    print("Most CCU plants are near profitable already - consider adding higher electrolyzer costs etc., also no ETS incentive?")
-    print("I should verify the methanol production - is it reasonable really?")
 
     # print("--- Feedback from Johanna/Judit ---")
     # print("The KPIs are ish similar to those in Johanna's study. However, I am to optimistic about recovering waste heat.")
@@ -1531,7 +1549,6 @@ if __name__ == "__main__":
     # print("Finally, double check the conversion from H2 to methanol in synthesis - can I do it as an energy conversion, 100prc H2 to 100prc methanol? Do it via reaciton formula and LHV values as well! Check!")
     # print("-> This is suspicious because one H2 should be lost (mass-wise) for each methanol molecule produced: CO2+3H2=>CH3OH+H2O")
     # print(" .... She thinks I MUST DO EXERGY ANALYSIS... since heat is different... well, I don't think so, since I only need MONEY analysis!")
-    print(" ")
-    print("I should ask EON about the feasibility of CCU - seems like power costs are higher than methanol revenues?!")
+
     plt.show()
 
