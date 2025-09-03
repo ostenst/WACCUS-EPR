@@ -786,10 +786,10 @@ def plan_CCS(plant, x, transport_costs, sea_distances):
     # print("<<< Missing Truck/Rail/Harbor costs >>>")
     # print(plant["hub"], x["destination"])
     
-    hub_value = x[plant["hub"].lower()]              # Get the value (1, 2, or 3) for this hub name from x
+    hub_value = x[plant["hub"].lower()]              # Get the value (1, 2, or 3) for this hub
     scenario = f"{hub_value}Mt"                      # Convert to scenario name (1Mt, 2Mt, or 3Mt)
     
-    scenario_type = "optimist" if x["transport_optimism"] else "pessimist"
+    scenario_type = "optimist" if x["optimism"] else "pessimist"
     scenario_key = f"{scenario_type}_{scenario}"
     # print(scenario_key)
     
@@ -1224,26 +1224,20 @@ def WACCUS_EPR(
     # uncertainties
     mKN39 = 884393,     # [t/a] plastic products mappable under KN39 [IVL]
     pKN39 = 46000,      # [SEK/tpl] [IVL]
-    mgranulates = 1258597, # [t/a] granulates [IVL]
-    pgranulates = 13000, # [SEK/t] [IVL]
-    mbag = 5*10**-6,       # [t/bag] check plastic_mapping calculation
-    pbag = 0.72,           # [SEK/bag]
-    cfraction = 0.85,    # [-] cfraction of carbon in plastic [Isabel]
-    circulated = 0.10,   # [-] fraction of granulates circulated, exempt from tax
+    recyclable = 0.15,  # [-] fraction of simple products possible to recycle mechanically
+    cfraction = 0.75,    # [-] cfraction of carbon in plastic [Isabel]
 
-    FLH = 8000,
     LHV = 11,           # [MJ/kgf] [Hammar]
     Ccontent = 0.298,   # [kgC/kgf]
-    # fossil = 0.40,      # [-] NOTE: assumption not needed: emissions data is available and used
+    fossil = 0.40,      # [-] NOTE: assumption not needed: emissions data is available and used
     qreb = 3.5,         # [MJ/kgCO2]
     COP = 3,
-    heat_optimism = 0.70,  # [0,1] assumed % of waste heat that can be recovered to DH
-    makeup = 0.584/1000,    # [m3/tCO2] [Kumar, 2023]
-    etais = 0.80,           # [-]
 
+    FLH = 8000,
     dr = 0.075,
     t = 25,
     FOAK = 0.45/2,      # [-] [Beiron, 2024] applies to CO2 capture and conditioning 
+    # FOAK = 0, # FOR EON MEETING
     OPEXfix = 0.03,     # [-] [Beiron, 2024] % of CAPEX no, calculated from Ramboll BECCS Malmö [2-5%]
     camine = 2000,      # [EUR/m3] [Beiron, 2024]
     celc = 60,          # [EUR/MWh]
@@ -1257,45 +1251,40 @@ def WACCUS_EPR(
     stockholm = 1,      # [1,2,3] [Mt/yr]
     malmo = 1,          # [1,2,3] [Mt/yr]
     gothenburg = 1,     # [1,2,3] [Mt/yr]
+    optimism = False,   # [True, False]
     destination = "oygarden",  # ["oygarden", "kalundborg"]
-    transport_optimism = False,   # [True, False]
+    heat_optimism = 0.70,  # [0,1] assumed % of waste heat that can be recovered to DH
 
     # levers 
-    tax = 80,          # [EUR/tCO2] [50, 100, 150, 200, 250, 300, 350] NOTE: explore discrete ranges => easier to visualize later
-    recyclable = 0.15,  # [-] fraction of products possible to recycle mechanically (exempt from tax), determined by policy criteria
+    tax = 110,          # [EUR/tCO2]
 
     # constants
-    question = ["granulates"], # ["granulates", "products", "both"]
-    case = ["CCUS"],    # ["CCUS", "CCU", "CCS"] conduct analysis separately for the three cases
     plants = None,
+    case = ["CCUS"],    # ["CCUS", "CCU", "CCS"] conduct analysis separately for the three cases
     k = 0.6857,         # [-] [Stenström, 2025]
     CAPEX_ref = 3715 * 87,  # [MNOK] -> [kEUR] NOTE: can pick other CELSIO CAPEX from source:[Gassnova, Demonstrasjon av Fullskala CO2-Håndtering - Rapport for Avsluttet Forprosjekt]
     captured_ref = 400,     # [ktCO2/yr]
     transport_costs = None,  # Dictionary of transport cost interpolation functions
     sea_distances = None,    # Dictionary of pre-calculated sea distances
     thermo_props = None,     # Dictionary of thermodynamic properties
+
     SEK_TO_EUR = 0.091,     # [EUR/SEK] Exchange rate
-    # assumption = producers do not react to the tax, no recycling rates
+    makeup = 0.584/1000,    # [m3/tCO2] [Kumar, 2023]
+    etais = 0.80,           # [-]
 ):
     x = {
         "mKN39": mKN39,
+        "recyclable": recyclable,
         "pKN39": pKN39,
-        "mgranulates": mgranulates,
-        "pgranulates": pgranulates,
-        "mbag": mbag,
-        "pbag": pbag,
         "cfraction": cfraction,
         
-        "FLH": FLH,
         "LHV": LHV,
         "Ccontent": Ccontent,
-        # "fossil": fossil,
+        "fossil": fossil,
         "qreb": qreb,
         "COP": COP,
-        "heat_optimism": heat_optimism,
-        "makeup": makeup,
-        "etais": etais,
 
+        "FLH": FLH,
         "dr": dr,
         "t": t,
         "FOAK": FOAK,
@@ -1306,6 +1295,7 @@ def WACCUS_EPR(
         "CRC": CRC,
         "ETS": ETS,
         "pmethanol": pmethanol,
+        "heat_optimism": heat_optimism,
 
         "tax": tax,
         "k": k,
@@ -1317,34 +1307,50 @@ def WACCUS_EPR(
         "stockholm": stockholm,
         "malmo": malmo,
         "gothenburg": gothenburg,
+        "optimism": optimism,
         "destination": destination,
-        "transport_optimism": transport_optimism,
-
+        "makeup": makeup,
+        "etais": etais,
         "thermo_props": thermo_props,  # Add thermodynamic properties to x dictionary
     }
 
-    # Taxing plastic products
-    for question in ["granulates"]:
-        if question == "granulates":
-            mass_taxed = mgranulates * (1 - circulated) * cfraction # [tC/yr]
-            granulates_inc = tax * (cfraction*3.66) / (pgranulates*SEK_TO_EUR) # [-]
-            products_inc = tax * (cfraction*3.66) / (pKN39*SEK_TO_EUR) 
-            bag_inc = tax * (cfraction*3.66 * mbag) / (pbag*SEK_TO_EUR) 
-        elif question == "products":
-            mass_taxed = mKN39 * (1 - recyclable) * cfraction # [tC/yr]
-            granulates_inc = 0 # [-]
-            products_inc = tax * (cfraction*3.66) / (pKN39*SEK_TO_EUR) 
-            bag_inc = tax * (cfraction*3.66 * mbag) / (pbag*SEK_TO_EUR)
-        elif question == "both":
-            mass_taxed = mgranulates * (1 - circulated) * cfraction + mKN39 * (1 - recyclable) * cfraction # [tC/yr]
-            granulates_inc = tax * (cfraction*3.66) / (pgranulates*SEK_TO_EUR) # EUR/tCO2 * (tC/tpl*tCO2/tC) / (EUR/tpl) = EUR/tCO2 * (tCO2/tpl) / (EUR/tpl)
-            products_inc = 2 * tax * (cfraction*3.66) / (pKN39*SEK_TO_EUR) # [-] Motivate why this is not double taxation!
-            bag_inc = 2 * tax * (cfraction*3.66 * mbag) / (pbag*SEK_TO_EUR) # EUR/tCO2 * (tCO2/bag) / (EUR/bag)
+    # RQ1: tax revenues
 
-        mass_CO2 = mass_taxed * 3.66 # [tCO2/yr]
-        fund = mass_CO2 * tax * 10**-6 # [MEUR/yr]
+    # Plot fund values as a function of tax level for two cases
+    tax_levels = np.linspace(50, 300, 100)
+    mass_taxed_1 = 1.2
+    mass_taxed_2 = 0.6 # [Mtpl /yr]
 
-    # Creating CCUS bids from CCUS costs
+    fund_1 = mass_taxed_1 * cfraction * 3.66 * tax_levels  # [MEUR/yr]
+    fund_2 = mass_taxed_2 * cfraction * 3.66 * tax_levels  # [MEUR/yr]
+
+    plt.figure()
+    plt.plot(tax_levels, fund_1, label=f"mass_taxed = {mass_taxed_1:.1f} Mt plastic/yr")
+    plt.plot(tax_levels, fund_2, label=f"mass_taxed = {mass_taxed_2:.1f} Mt plastic/yr")
+    plt.axhline(120, color='red', linestyle='--', label='120 MEUR/yr = Exergi subsidy')
+    plt.xlabel("Tax level [EUR/tCO2]", fontsize=14)
+    plt.ylabel("Fund [MEUR/yr]", fontsize=14)
+    plt.title("Fund as function of tax level", fontsize=14)
+    plt.legend(fontsize=14)
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig('fund_potential.png', dpi=600, bbox_inches='tight')
+
+    mass_taxed = mKN39 * (1 - recyclable) * cfraction # [tC/yr]
+    mass_CO2 = mass_taxed * 3.66 # [tCO2/yr]
+    fund = mass_CO2 * tax # [EUR/yr]
+    fund /= 10**6 # [MEUR/yr]
+
+    # Forcing an example for EON:
+    mass_CO2 = 1.2 * cfraction * 3.66 # [MtCO2/yr]
+    fund = mass_CO2 * tax # [MEUR/yr]
+
+    # RQ1: product price increases
+    products_df = pd.read_csv("data/products.csv")
+    products_df['tax_amount'] = products_df['weight per unit [kg]']/1000 * (products_df['fossil carbon content [mass%]']/100) * 3.66 * tax  # [EUR]
+    products_df['price_increase_percent'] = (products_df['tax_amount'] / products_df['price per unit [EUR]']) * 100  # [%]
+
+    # RQ2: subsidy costs
     if case == "CCUS":
         CCU_names = ["Renova","SAKAB","Filbornaverket","Garstadverket","Sjolunda"]
         CCS_names = ["Handeloverket","Bristaverket","Vasteras KVV","Hogdalenverket","Bolanderna"]
@@ -1356,6 +1362,7 @@ def WACCUS_EPR(
         CCU_names = []
         CCS_names = ["Renova","Hogdalenverket","Sjolunda","Korstaverket","Garstadverket","Vasteras KVV","Handeloverket","Bolanderna","Filbornaverket","Bristaverket"]
 
+    # Collect all bids
     bids = []
     for _, plant in plants.iterrows():
         if plant["Name"] in CCS_names:
@@ -1470,9 +1477,6 @@ def WACCUS_EPR(
     print(f"Qmethanol: {total_Qmethanol/1000:.1f} GWh/yr")
 
     output = {
-        'granulates_inc': granulates_inc,
-        'products_inc': products_inc,
-        'bag_inc': bag_inc,
         'total_FCCS': total_FCCS,
         'total_BECCS': total_BECCS,
         'total_FCCU': total_FCCU,
@@ -1481,6 +1485,7 @@ def WACCUS_EPR(
         'total_Qpenalty': total_Qpenalty,
         'total_Qmethanol': total_Qmethanol,
         'remaining_fund': remaining_fund,
+        'product_increases': products_df[['name', 'price per unit [EUR]', 'tax_amount', 'price_increase_percent']].to_dict('records'),
         'bid_data': bids,
     }
     return output
@@ -1511,14 +1516,12 @@ if __name__ == "__main__":
     
     # Run the model
     output = WACCUS_EPR(
-        question="granulates",
-        case="CCS", 
         plants=plants, 
         k=k,                          # For CAPEX=CAPEX_ref⋅(mCO2/mCO2_ref)^k
+        case="CCU", 
         transport_costs=transport_costs,
         sea_distances=sea_distances,  # Pass pre-calculated distances dict
-        thermo_props=thermo_props,     # Pass thermodynamic properties
-        SEK_TO_EUR=SEK_TO_EUR,
+        thermo_props=thermo_props     # Pass thermodynamic properties
     )
     
     # Create and save the plots
@@ -1532,25 +1535,6 @@ if __name__ == "__main__":
     positive_categories = ['OPEXfix', 'OPEXmakeup', 'OPEXenergy', 'levelized_CAPEX', 'transport_cost']    
     negative_categories = ['fossil_incentive', 'biogenic_incentive']
     fig3 = plot_plant_cost_breakdown(ccs_plants)
-
-    # Plot price increases
-    plt.figure(figsize=(10, 6))
-    categories = ['Granulates', 'Products', 'Bags']
-    values = [output['granulates_inc'], output['products_inc'], output['bag_inc']]
-    
-    bars = plt.bar(categories, values, color=['skyblue', 'lightcoral', 'lightgreen'], alpha=0.7)
-    
-    # Add value labels on top of bars
-    for bar, value in zip(bars, values):
-        height = bar.get_height()
-        plt.text(bar.get_x() + bar.get_width()/2., height + 0.001,
-                f'{value:.3f}', ha='center', va='bottom', fontweight='bold')
-    
-    plt.ylabel('Price Increase [-]', fontsize=12)
-    plt.title('Plastic Price Increases Due to Carbon Tax', fontsize=14, fontweight='bold')
-    plt.grid(True, alpha=0.3, axis='y')
-    plt.tight_layout()
-    plt.savefig('price_increases.png', dpi=600, bbox_inches='tight')
 
     # print("--- Feedback from Johanna/Judit ---")
     # print("The KPIs are ish similar to those in Johanna's study. However, I am to optimistic about recovering waste heat.")
@@ -1566,6 +1550,5 @@ if __name__ == "__main__":
     # print("-> This is suspicious because one H2 should be lost (mass-wise) for each methanol molecule produced: CO2+3H2=>CH3OH+H2O")
     # print(" .... She thinks I MUST DO EXERGY ANALYSIS... since heat is different... well, I don't think so, since I only need MONEY analysis!")
 
-    print("\nTODO: IMPLEMENT PLASTIC PRICE INCREASES")
     plt.show()
 
