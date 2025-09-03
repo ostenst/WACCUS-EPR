@@ -665,15 +665,15 @@ def plan_CCU(plant, x, plot_single=False):
     # print(f"KPI5: {KPI5:.2f}")
 
     # Estimate CAPEX and OPEX of all units
-    print("-- START FROM HERE, VERIFY COSTS -- ")
     CAPEX, levelized_CAPEX = estimate_CAPEX(mcaptured, x)  # [kEUR, EUR/tCO2] NOTE: Includes compression/liq CAPEX...
-    OPEXfix = x["OPEXfix"] * CAPEX # [kEUR/yr]
-    CAPEX_H2 = 550 * PH2 # [kEUR] [Danish Agency Excel Renewable Fuels AEC100MW]  550kEUR/MWe
-    OPEX_H2 = 0.04 * CAPEX_H2 # [kEUR/yr] 
+    OPEXfix = x["OPEXfix"] * CAPEX # [kEUR/yr] NOTE: check if should be *1000 or not?
+    CAPEX_H2 = x["CAPEX_H2_ref"] * PH2 # [kEUR] [Danish Agency Excel Renewable Fuels AEC100MW]  550kEUR/MWe
+    OPEX_H2 = x["OPEXfix"] * CAPEX_H2 # [kEUR/yr] could do separate OPEXfactors for CO2capture and H2 - but lets combine them :)
 
-    # CAPEX_synthesis = 1.09*1000 * Qmethanol/x["FLH"] # [kEUR] # Danish Renewable Fuels PDF has a power function of CAPEX_synthesis. Fig4, p.186. 
-    CAPEX_synthesis = 1.8749 * m_methanol ** -0.315 *1000 # quoted accuracy: +-50%, at kEUR2020 (so use CEPCI?)
-    OPEX_synthesis = 0.05 * CAPEX_synthesis # [kEUR/yr] However, these arrive at the same cost roughly: [Beiron, Grahn! Includes destillation probably]
+    # CAPEX_synthesis = 1.09 * Qmethanol/x["FLH"] # [kEUR] # Danish Renewable Fuels PDF has a power function of CAPEX_synthesis. Fig4, p.186.
+    # print(plant["Name"],"\n", CAPEX_synthesis, "linear", np.round(Qmethanol/x["FLH"], 0), "MW", mCO2) linear model is bad! use power model
+    CAPEX_synthesis = x["CAPEX_synthesis_ref"] * m_methanol ** -0.315 *1000 # quoted accuracy: +-50%, at kEUR2020 (so use CEPCI?)
+    OPEX_synthesis = x["OPEXfix"] * CAPEX_synthesis # [kEUR/yr] However, these arrive at the same cost roughly: [Beiron, Grahn! Includes destillation probably]
 
     levelized_CAPEX_H2 = levelize(CAPEX_H2, mcaptured, x)
     levelized_CAPEX_synthesis = levelize(CAPEX_synthesis, mcaptured, x)
@@ -687,22 +687,12 @@ def plan_CCU(plant, x, plot_single=False):
 
     # Summarize and bid
     CAC = levelized_CAPEX + levelized_CAPEX_H2 + levelized_CAPEX_synthesis + levelized_OPEXfix + levelized_OPEX_H2 + levelized_OPEX_synthesis + levelized_CAPEX_CO2_comp + levelized_CAPEX_H2_comp
-    print("Notably, only capture plant and H2 CAPEX/OPEX matters: other costs are miniscule")
-    print(levelized_CAPEX, levelized_CAPEX_H2, levelized_CAPEX_synthesis, levelized_OPEXfix, levelized_OPEX_H2, levelized_OPEX_synthesis, levelized_CAPEX_CO2_comp, levelized_CAPEX_H2_comp)
 
     costs_power = Ppenalty*x["celc"] / annual_CO2 # [EUR/tCO2] 
     revenues_heat = abs(Qpenalty)*x["celc"]*x["cheat"] / annual_CO2 # [EUR/tCO2] 
     revenues_methanol = Qmethanol*3600/LHV_methanol /1000 * x["pmethanol"]  / annual_CO2 #[EUR/tCO2]
     energy_revenues = revenues_heat + revenues_methanol - costs_power # [EUR/tCO2]
-    print(f"costs_power: {costs_power:.2f} EUR/tCO2")
-    print(f"revenues_heat: {revenues_heat:.2f} EUR/tCO2")
-    print(f"revenues_methanol: {revenues_methanol:.2f} EUR/tCO2")
-    print(f"energy_revenues: {energy_revenues:.2f} EUR/tCO2")
-
     bid = CAC - energy_revenues # [EUR/tCO2]
-    print(f"\nCAC: {CAC:.2f} EUR/tCO2")
-    print(f"energy_revenues: {energy_revenues:.2f} EUR/tCO2")
-    print(f"bid: {bid:.2f} EUR/tCO2")
 
     fossil = plant["Fossil"] / plant["Total"]                           # [tfossil/t] share of fossil CO2
     biogenic = 1 - fossil  
@@ -1241,6 +1231,9 @@ def WACCUS_EPR(
     makeup = 0.584/1000,    # [m3/tCO2] [Kumar, 2023]
     etais = 0.80,           # [-]
 
+    CAPEX_ref = 3715 * 87,  # [MNOK] -> [kEUR] NOTE: can pick other CELSIO CAPEX from source:[Gassnova, Demonstrasjon av Fullskala CO2-Håndtering - Rapport for Avsluttet Forprosjekt]
+    CAPEX_H2_ref = 550, # [kEUR/MWe] [Danish Agency Excel Renewable Fuels AEC100MW]
+    CAPEX_synthesis_ref = 1.8749, # [kEUR] check units! Danish Renewable Fuels PDF has a power function of CAPEX_synthesis. Fig4, p.186.
     dr = 0.075,
     t = 25,
     FOAK = 0.45/2,      # [-] [Beiron, 2024] applies to CO2 capture and conditioning 
@@ -1269,7 +1262,6 @@ def WACCUS_EPR(
     case = ["CCUS"],    # ["CCUS", "CCU", "CCS"] conduct analysis separately for the three cases
     plants = None,
     k = 0.6857,         # [-] [Stenström, 2025]
-    CAPEX_ref = 3715 * 87,  # [MNOK] -> [kEUR] NOTE: can pick other CELSIO CAPEX from source:[Gassnova, Demonstrasjon av Fullskala CO2-Håndtering - Rapport for Avsluttet Forprosjekt]
     captured_ref = 400,     # [ktCO2/yr]
     transport_costs = None,  # Dictionary of transport cost interpolation functions
     sea_distances = None,    # Dictionary of pre-calculated sea distances
@@ -1296,6 +1288,9 @@ def WACCUS_EPR(
         "makeup": makeup,
         "etais": etais,
 
+        "CAPEX_ref": CAPEX_ref,
+        "CAPEX_H2_ref": CAPEX_H2_ref,
+        "CAPEX_synthesis_ref": CAPEX_synthesis_ref,
         "dr": dr,
         "t": t,
         "FOAK": FOAK,
@@ -1309,7 +1304,6 @@ def WACCUS_EPR(
 
         "tax": tax,
         "k": k,
-        "CAPEX_ref": CAPEX_ref,
         "captured_ref": captured_ref,
 
         "lulea": lulea,
@@ -1512,7 +1506,7 @@ if __name__ == "__main__":
     # Run the model
     output = WACCUS_EPR(
         question="granulates",
-        case="CCS", 
+        case="CCU", 
         plants=plants, 
         k=k,                          # For CAPEX=CAPEX_ref⋅(mCO2/mCO2_ref)^k
         transport_costs=transport_costs,
@@ -1521,6 +1515,7 @@ if __name__ == "__main__":
         SEK_TO_EUR=SEK_TO_EUR,
     )
     
+    print("For CCU, mainly capture plants and H2 CAPEX/OPEX matters: other costs are miniscule")
     # Create and save the plots
     fig1 = plot_awarded_metrics(output)
 
@@ -1565,7 +1560,5 @@ if __name__ == "__main__":
     # print("Finally, double check the conversion from H2 to methanol in synthesis - can I do it as an energy conversion, 100prc H2 to 100prc methanol? Do it via reaciton formula and LHV values as well! Check!")
     # print("-> This is suspicious because one H2 should be lost (mass-wise) for each methanol molecule produced: CO2+3H2=>CH3OH+H2O")
     # print(" .... She thinks I MUST DO EXERGY ANALYSIS... since heat is different... well, I don't think so, since I only need MONEY analysis!")
-
-    print("\nTODO: IMPLEMENT PLASTIC PRICE INCREASES")
     plt.show()
 
