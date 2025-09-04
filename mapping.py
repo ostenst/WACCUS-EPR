@@ -20,7 +20,7 @@ def plot_europe():
     ]
     
     # Read the Europe shapefile and convert to WGS84 coordinate system
-    europe = gpd.read_file("shapefiles/Europe/Europe_merged.shp").to_crs("EPSG:4326")
+    europe = gpd.read_file("data/shapefiles/Europe/Europe_merged.shp").to_crs("EPSG:4326")
     
     # Read plants data from plants.csv
     plants_df = pd.read_csv("data/plants.csv")
@@ -68,13 +68,13 @@ def plot_europe():
         "Renova",
         "Hogdalenverket", 
         "Sjolunda",
-        # "Korstaverket",
+        "Bristaverket",
         "Garstadverket",
         "Vasteras KVV",
         "Handeloverket",
-        # "Bolanderna",
-        # "Filbornaverket",
-        # "Bristaverket"
+        "Bolanderna",
+        "Filbornaverket",
+        "Hogbytorp"
     ]
     # green_plants = []
     
@@ -96,7 +96,7 @@ def plot_europe():
         
         # Color plants based on hard-coded list: blue if in list, grey otherwise
         if plant['Name'] in green_plants:
-            color = 'mediumseagreen'
+            color = 'deepskyblue' #mediumseagreen
             alpha = 0.8
         else:
             color = 'grey'
@@ -109,15 +109,17 @@ def plot_europe():
     ax.set_ylim(53.5, 70)
     ax.set_aspect(1.90) 
 
-    # Add title and labels
-    ax.set_title("Europe Map View", fontsize=14, fontweight='bold')
-    ax.set_xlabel("Longitude (°E)", fontsize=12)
-    ax.set_ylabel("Latitude (°N)", fontsize=12)
+    # Remove all ticks and labels for a clean map
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_xlabel("")
+    ax.set_ylabel("")
+    ax.set_title("")
     
     # Add legend
     ax.scatter([], [], marker='D', s=100, color='crimson', edgecolor='black', linewidth=1, label='Hubs')
     ax.scatter([], [], marker='D', s=100, color='maroon', edgecolor='black', linewidth=1, label='Storage')
-    ax.scatter([], [], s=200, color='mediumseagreen', alpha=0.8, edgecolor='black', linewidth=0.5, label='Selected plants')
+    ax.scatter([], [], s=200, color='deepskyblue', alpha=0.8, edgecolor='black', linewidth=0.5, label='Selected plants')
     ax.scatter([], [], s=200, color='grey', alpha=0.4, edgecolor='black', linewidth=0.5, label='Other plants')
     ax.legend(loc='upper left')
     

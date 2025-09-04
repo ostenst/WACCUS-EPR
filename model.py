@@ -105,6 +105,7 @@ def estimate_CAPEX(mcaptured, x):
 
     # Calculate CAPEX using power law model
     CAPEX = x["CAPEX_ref"] * (mannual / x["captured_ref"]) ** x["k"]  # [kEUR]
+    print("CELSIO method yields:",x["CAPEX_ref"] * (65*8000/1000 / x["captured_ref"]) ** x["k"] /1000, " MEUR")
     CAPEX *= 1 + x["FOAK"]
     
     # Calculate levelized CAPEX using the levelize function
@@ -1217,7 +1218,7 @@ def WACCUS_EPR(
     mgranulates = 1258597, # [t/a] granulates [IVL]
     pgranulates = 13000, # [SEK/t] [IVL]
     mbag = 5*10**-6,       # [t/bag] check plastic_mapping calculation
-    pbag = 0.72,           # [SEK/bag]
+    pbag = 4,           # [SEK/bag]
     cfraction = 0.85,    # [-] cfraction of carbon in plastic [Isabel]
     circulated = 0.10,   # [-] fraction of granulates circulated, exempt from tax
 
@@ -1254,7 +1255,7 @@ def WACCUS_EPR(
     transport_optimism = False,   # [True, False]
 
     # levers 
-    tax = 80,          # [EUR/tCO2] [50, 100, 150, 200, 250, 300, 350] NOTE: explore discrete ranges => easier to visualize later
+    tax = 110,          # [EUR/tCO2] [50, 100, 150, 200, 250, 300, 350] NOTE: explore discrete ranges => easier to visualize later
     recyclable = 0.15,  # [-] fraction of products possible to recycle mechanically (exempt from tax), determined by policy criteria
 
     # constants
@@ -1343,12 +1344,12 @@ def WACCUS_EPR(
         CCU_names = ["Renova","SAKAB","Filbornaverket","Garstadverket","Sjolunda"]
         CCS_names = ["Handeloverket","Bristaverket","Vasteras KVV","Hogdalenverket","Bolanderna"]
     elif case == "CCU":
-        CCU_names = ["Renova","Hogdalenverket","Sjolunda","Korstaverket","Garstadverket","Vasteras KVV","Handeloverket","Bolanderna","Filbornaverket","Bristaverket"]
+        CCU_names = ["Renova","Hogdalenverket","Sjolunda","Hogbytorp","Garstadverket","Vasteras KVV","Handeloverket","Bolanderna","Filbornaverket","Bristaverket"]
         # CCU_names = ["Renova"]
         CCS_names = []
     elif case == "CCS":
         CCU_names = []
-        CCS_names = ["Renova","Hogdalenverket","Sjolunda","Korstaverket","Garstadverket","Vasteras KVV","Handeloverket","Bolanderna","Filbornaverket","Bristaverket"]
+        CCS_names = ["Renova","Hogdalenverket","Sjolunda","Hogbytorp","Garstadverket","Vasteras KVV","Handeloverket","Bolanderna","Filbornaverket","Bristaverket"]
 
     bids = []
     for _, plant in plants.iterrows():
@@ -1506,7 +1507,7 @@ if __name__ == "__main__":
     # Run the model
     output = WACCUS_EPR(
         question="granulates",
-        case="CCU", 
+        case="CCS", 
         plants=plants, 
         k=k,                          # For CAPEX=CAPEX_ref⋅(mCO2/mCO2_ref)^k
         transport_costs=transport_costs,

@@ -1,6 +1,6 @@
 Name,City,Latitude,Longitude,Biogenic,Fossil,Total,Qwaste,Qdh,P,Qfgc,Connected,CCUSmix,Comment,
 Renova,Goteborg,57.732,12.053,321,223,544,171,126,45,38,FALSE,CCS,Boiler: 171 MW thermal,
-Korstaverket,Sundsvall,62.404,17.392,112,89,202,60,39,21,7,FALSE,CCS,Boiler: 60 MW thermal,
+Hogbytorp,Bro,59.5453,17.6197,184,123,307,99,70,29,22,FALSE,CCS,Boiler: 99 MW thermal,
 Filbornaverket,Helsingborg,56.0675,12.7367,122,92,214,69,52,17,20,FALSE,CCS,Boiler: 69 MW thermal,
 Garstadverket,Linkoping,58.437,15.655,321,278,599,175,135,40,38.5,FALSE,CCS,"2 waste-fired CHP boilers on site, 81 + 94 MW thermal",
 Sjolunda,Malmo,55.6167,13.0333,303,283,586,170,130,40,6,FALSE,CCS,"2 waste-fired CHP boilers on site, 85 + 85 MW thermal",
