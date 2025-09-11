@@ -4,7 +4,7 @@ import geopandas as gpd
 from matplotlib.patches import Patch
 
 # Load the data
-df = pd.read_csv("data/thesis_fig2.csv", encoding='latin-1')
+df = pd.read_csv("thesis_fig2.csv", encoding='latin-1')
 
 # Filter for pulp and paper plants
 pulp_plants = df[df['Industry/Plant type'] == 'Pulp and paper']
