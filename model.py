@@ -18,7 +18,7 @@ def cost_transport():
             Keys: 'optimist_1Mt', 'pessimist_1Mt', 'optimist_2Mt', 'pessimist_2Mt', 'optimist_3Mt', 'pessimist_3Mt'
     """
     # Read transport costs data
-    df = pd.read_csv("data/transport_costs.csv")
+    df = pd.read_csv("data/shipping_costs.csv")
     
     # Convert costs from SEK to EUR
     cost_columns = ['optimist_1Mt', 'pessimist_1Mt', 'optimist_2Mt', 
