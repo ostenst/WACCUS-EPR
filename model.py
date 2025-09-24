@@ -2,7 +2,7 @@
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
-from scipy.interpolate import interp1d
+from scipy.interpolate import griddata
 import matplotlib.pyplot as plt
 import searoute as sr
 import CoolProp.CoolProp as CP
@@ -111,6 +111,134 @@ def shipping_adjustment(df, scaling=0.67, debug=False):
     
     return shipping_df
 
+def levelize_kEUR(CAPEX, annual_CO2, x):
+    """
+    Levelize CAPEX in [kEUR] to [EUR/tCO2].
+
+    """
+    CRF = x["dr"] * (1 + x["dr"])**x["t"] / ((1 + x["dr"])**x["t"] - 1)
+    CAPEX_annual = CAPEX * CRF  # [kEUR/yr]
+    CAPEX_lev = CAPEX_annual / annual_CO2 * 1000  # [EUR/tCO2]
+    return CAPEX_lev
+
+def truck_cost(annual_CO2, distance, trucks_df):
+    """Get interpolated truck cost for given mass and distance using 2D interpolation"""
+
+    masses = trucks_df['mass'].values
+    distances = trucks_df['km'].values
+    costs = trucks_df['EUR/ton'].values
+    
+    # Create grid points for interpolation
+    points = np.column_stack((masses, distances))
+    
+    # Check if point is within bounds, if not use extrapolation
+    mass_min, mass_max = masses.min(), masses.max()
+    dist_min, dist_max = distances.min(), distances.max()
+    
+    if annual_CO2 < mass_min or annual_CO2 > mass_max or distance < dist_min or distance > dist_max:
+        # Use nearest neighbor for extrapolation
+        truck_cost = griddata(points, costs, (annual_CO2, distance), method='nearest')
+    else:
+        # Use linear interpolation
+        truck_cost = griddata(points, costs, (annual_CO2, distance), method='linear')
+    return truck_cost
+
+def loading_cost(annual_CO2, x):
+    """Estimate CAPEX of loading infrastructure based on a 150 ktCO2/yr reference"""
+    loading_cost = x["CAPEXref_loading"] * (annual_CO2/(150*10**3)) ** x["k"] * x["CEPCI"] /1000 # [kEUR]
+    loading_cost = levelize_kEUR(loading_cost, annual_CO2, x) # [EUR/tCO2]
+    return loading_cost
+
+def pipeline_cost(annual_CO2, pipeline_length, x):
+    """ Pipeline length in [m], returns levelized CAPEX in [EUR/tCO2]"""
+    mCO2 = annual_CO2*1000/x["FLH"]/3600    # [kgCO2/s]
+    nCO2 = mCO2/44                          # [kmolCO2/s]
+    VCO2 = nCO2*22.4                        # [m3CO2/s] assuming ideal gas at standard conditions
+    vCO2 = 16                               # [m/s] [Tharun, 2025] check paper "Enhancing early ..." and Appendix
+    Mcomp = 1.2 # [-] margin
+    Cfcomp = 568 # [EUR/m2]
+    CAPEX_pipeline = (2*np.pi*((VCO2/vCO2)/np.pi)**0.5 * (pipeline_length*Mcomp)) * Cfcomp # [EUR2015] [Tharun, 2025]
+    CAPEX_pipeline = CAPEX_pipeline * x["CEPCI"] / 1000 # [kEUR]
+    CAPEXlev_pipeline = levelize_kEUR(CAPEX_pipeline, annual_CO2, x) # [EUR/tCO2]
+    return CAPEXlev_pipeline
+
+def plan_CCS(plant, c, x, l):
+    # burn fuel and capture/condition CO2
+    mfuel = plant["Qwaste"] / (x["LHVf"]/3600) /3600    # [kgf/s]
+    mCO2 = mfuel* x["Ccontent"] * 44/12                 # [kgCO2/s]
+    mcaptured = mCO2 * x["capture_rate"]                # [kgCO2/s]
+    Qreb = mcaptured * x["q_reb"]                       # [MW]
+    Pcapture = x["p_capture"] * mcaptured/1000*3600     # [MW] 
+    Pcondition = x["p_condition"] * mcaptured           # [MW]  
+
+    # penalize CHP and recover heat up to 100 % of original DH - use whatever power is available for HP
+    P = plant["P"] * (1 - Qreb/plant["Qwaste"])         # assuming live steam is used for reboiler
+    P = P - Pcapture - Pcondition
+    Qdh = plant["Qdh"] * (1 - Qreb/plant["Qwaste"])
+
+    Qhex = 0.64 * Qreb                                  # [MW] [Beiron, 2022]
+    Qdiff = plant["Qdh"] - (Qdh + Qhex)
+    if Qdiff < 0:
+        raise ValueError
+    else:
+        Whp = Qdiff / x["COP"]
+        if Whp > P: 
+            Whp = P
+    Qdh = Qdh + Qhex + Whp*x["COP"]
+    P -= Whp
+    Ppenalty = (plant["P"] - P) * x["FLH"]        # [MWh/yr]
+    Qpenalty = (plant["Qdh"] - Qdh) * x["FLH"]    # [MWh/yr]
+
+    # Estimate CAPEX and on-site OPEX
+    annual_CO2 = mcaptured/1000*3600 * x["FLH"]  # [tCO2/yr]
+    CAPEX_capture = x["CAPEXref_capture"] * (annual_CO2/(400*10**3)) ** x["k"] * x["CEPCI"] # [kEUR]
+    CAPEXlev_capture = levelize_kEUR(CAPEX_capture, annual_CO2, x)                  # [EUR/tCO2]
+
+    OPEXfix = (CAPEX_capture*1000 * x["OPEXfix"]) / annual_CO2                      # [EUR/tCO2] 
+    OPEXmakeup = x["camine"]                                                        # [EUR/tCO2]
+    OPEXenergy = (Ppenalty*x["celc"] + Qpenalty*x["celc"]*x["cheat"]) / annual_CO2  # [EUR/tCO2]
+    OPEX = OPEXfix + OPEXmakeup + OPEXenergy   
+
+    # Calculate transport costs
+    if plant['Truck_distance'] is not None and not pd.isna(plant['Truck_distance']):
+        cost_loading = loading_cost(annual_CO2, x)                                  # [EUR/tCO2]
+        cost_truck = truck_cost(annual_CO2, plant['Truck_distance'], c["truck_df"]) # [EUR/tCO2]
+
+    if plant['Pipeline_distance'] is not None and not pd.isna(plant['Pipeline_distance']):
+        cost_pipeline = pipeline_cost(annual_CO2, plant['Pipeline_distance'], x)    # [EUR/tCO2]
+
+    # NEXT: IMPLEMENT TRAIN AND SHIP COSTS
+
+
+    # # Construct a reversed auction bid
+    # CAC = OPEX + levelized_CAPEX + transport_cost                        # [EUR/t]
+
+    # fossil = plant["Fossil"] / plant["Total"]                                 # [tfossil/t] share of fossil CO2
+    # biogenic = 1 - fossil                                                     # [tbiogenic/t] share of biogenic CO2
+    # incentives = fossil * x["ETS"] + biogenic * x["CRC"]                      # [EUR/t]
+    # bid = CAC - incentives          
+
+    # # Store detailed cost data
+    # cost_details = {
+    #     'OPEXfix': OPEXfix,
+    #     'OPEXmakeup': OPEXmakeup,
+    #     'OPEXenergy': OPEXenergy,
+    #     'OPEX': OPEX,
+    #     'levelized_CAPEX': levelized_CAPEX,
+    #     'transport_cost': transport_cost,
+    #     'CAC': CAC,
+    #     'fossil_incentive': fossil * x['ETS'],
+    #     'biogenic_incentive': biogenic * x['CRC'],
+    #     'incentives': incentives,
+    #     'bid': bid
+    # }
+
+    # FCCS = mcaptured*10**-6*3600 * x["FLH"] * fossil                           # [ktCO2/yr]
+    # BECCS = mcaptured*10**-6*3600 * x["FLH"] * biogenic                        # [ktCO2/yr]
+
+    bid, FCCS, BECCS, Ppenalty, Qpenalty, cost_details = [1,2,3,4,5,6]
+    return bid, FCCS, BECCS, Ppenalty, Qpenalty, cost_details # [MWh/yr]
+
 def WACCUS_EPR( 
     # constants
     question="granulates",
@@ -142,6 +270,7 @@ def WACCUS_EPR(
 
     q_reb = 3.5,            # [MJ/kgCO2]
     p_capture = 0.1,        # [MWh/tCO2] [Beiron, 2022]
+    p_condition = 0.37,     # [MJ/kgCO2] [Kumar, 2023]
     n_is = 0.80,            # [-]
     n_electrolyzer = 0.699, # [MWH2/MWel] Table2.1 MSc Jacobsson & Palmgren (2025)
     q_electrolyzer = 0.154, # [MWth/MWel] [AEL tech, Fig2.1 MSc Jacobsson & Palmgren, 2025] OR [Danish Renwable Fuels 100MW AEC]
@@ -151,13 +280,13 @@ def WACCUS_EPR(
     COP = 3,                # [MWth/MWel]
     heat_optimism = 0.70,   # [0,1] assumed % of waste heat that can be recovered to DH
 
-    CAPEXref_cappture = 3550*0.09*1000, # [MNOK]->[kEUR] @400 ktCO2/yr [Gassnova, Demonstrasjon av Fullskala CO2-Håndtering - Rapport for Avsluttet Forprosjekt]
+    CAPEXref_capture = 3550*0.09*1000, # [MNOK]->[kEUR] @400 ktCO2/yr [Gassnova, Demonstrasjon av Fullskala CO2-Håndtering - Rapport for Avsluttet Forprosjekt]
     CAPEXref_H2 = 550,                  # [kEUR/MWe] [Danish Agency Excel Renewable Fuels AEC100MW]
     CAPEXref_synthesis = 1.8749,        # [MEUR] [Danish Renewable Fuels PDF has a power function of CAPEX_synthesis. Fig4, p.186.] 
-    CAPEXref_rails = 63000000,          # [SEK*] @150 ktCO2/yr excluding railway track [Koldioxid på tåg, 2024]
+    CAPEXref_loading = 63000000,          # [SEK*] @150 ktCO2/yr excluding railway track [Koldioxid på tåg, 2024]
     CAPEXref_train = 86140000,          # [EUR*] an oversized train @15 wagons, cost = 4.98 *10**6 + 242*15 *10**3 [MSc Gunnarsson, 2025]
     k = 0.67,                           # [-] [Stenström, 2025] assumed economy-of-scale factor
-    CEPCI = 900/600,                    # [-] [University of Manchester, 2025] applies to reference CAPEX values
+    CEPCI = 900,                        # [-] [University of Manchester, 2025] applies to reference CAPEX values
     
     OPEXfix = 0.02,         # [-] % of base CAPEX, calculated from [Ramboll-Malmö, 2023]
     dr = 0.075,             # [-]
@@ -169,6 +298,9 @@ def WACCUS_EPR(
     ETS = 80,               # [EUR/tCO2]
     pmethanol = 625,        # [EUR/t] [MSc Omar & Widgren, 2025]
 
+    ship_uncertain = 0.10,  # [-] [-0.15,0.15]
+    truck_uncertain = 0.10, # [-] [-0.15,0.15]
+    train_uncertain = 0.10, # [-] [-0.15,0.15]
     stockholm = 1,          # [Mt/yr] [1,2,3] 
     malmo = 0.5,            # [Mt/yr] [0.5,1,2] 
     gothenburg = 0.5,       # [Mt/yr] [0.5,1,2] 
@@ -178,7 +310,13 @@ def WACCUS_EPR(
     tax = 100,          # [EUR/tCO2] [50, 400] NOTE: explore discrete ranges => easier to visualize later
     recyclable = 0.15,  # [-] fraction of products possible to recycle mechanically (exempt from tax), determined by policy criteria
 ):
-    # Store uncertainties (converted to EUR)
+    # Store constants, uncertainties (converted to EUR or CEPCI), and levers
+    c = {
+        "shipping_df": shipping_df,
+        "truck_df": truck_df,
+        "compression_df": compression_df,
+        "thermo_props": thermo_props,
+    }
     x = {
         "mKN39": mKN39,
         "pKN39": pKN39 * SEK_to_EUR,                # [EUR/tpl]
@@ -199,6 +337,7 @@ def WACCUS_EPR(
 
         "q_reb": q_reb,
         "p_capture": p_capture,
+        "p_condition": p_condition,
         "n_is": n_is,
         "n_electrolyzer": n_electrolyzer,
         "q_electrolyzer": q_electrolyzer,
@@ -208,13 +347,13 @@ def WACCUS_EPR(
         "COP": COP,
         "heat_optimism": heat_optimism,
 
-        "CAPEXref_cappture": CAPEXref_cappture,
+        "CAPEXref_capture": CAPEXref_capture,
         "CAPEXref_H2": CAPEXref_H2,
         "CAPEXref_synthesis": CAPEXref_synthesis,
-        "CAPEXref_rails": CAPEXref_rails * SEK_to_EUR, # [EUR @150ktCO2/yr]
+        "CAPEXref_loading": CAPEXref_loading * SEK_to_EUR, # [EUR @150ktCO2/yr]
         "CAPEXref_train": CAPEXref_train, 
         "k": k,
-        "CEPCI": CEPCI,
+        "CEPCI": CEPCI / 600,                              # assuming 600 as the ref year for all CAPEX
 
         "OPEXfix": OPEXfix,
         "dr": dr,
@@ -226,13 +365,20 @@ def WACCUS_EPR(
         "ETS": ETS,
         "pmethanol": pmethanol,
 
+        "ship_uncertain": ship_uncertain,
+        "truck_uncertain": truck_uncertain,
+        "train_uncertain": train_uncertain,
         "stockholm": stockholm,
         "malmo": malmo,
         "gothenburg": gothenburg,
         "storage": storage,
     }
+    l = {
+        "tax": tax,
+        "recyclable": recyclable,
+    }
 
-
+    # Tax plastic products
     if question == "granulates":
         mass_taxed = mgranulates * (1 - circulated) * cfraction # [tC/yr]
         granulates_inc = tax * (cfraction*3.66) / (pgranulates*SEK_to_EUR) # [-]
@@ -251,6 +397,37 @@ def WACCUS_EPR(
     mass_CO2 = mass_taxed * 3.66        # [tCO2/yr]
     mass_taxed = mass_taxed / cfraction # [tpl/yr]
     fund = mass_CO2 * tax * 10**-6      # [MEUR/yr]
+
+    # Create CCUS bids
+    bids = []
+    for _, plant in plants_df.iterrows():
+        if CCUS == "CCS":
+            bid, FCCS, BECCS, Ppenalty, Qpenalty, cost_details = plan_CCS(plant, c, x, l)
+            bids.append({
+                'type': 'CCS',
+                'name': plant['Name'],
+                'bid': bid,
+                'FCCS': FCCS,
+                'BECCS': BECCS,
+                'Ppenalty': Ppenalty,
+                'Qpenalty': Qpenalty,
+                'cost_details': cost_details
+            })
+
+        # if CCUS == "CCU":
+        #     FCCU, BCCU, bid, Ppenalty, Qpenalty, Qmethanol = plan_CCU(plant, x)
+        #     bids.append({
+        #         'type': 'CCU',
+        #         'name': plant['Name'],
+        #         'bid': bid,
+        #         'FCCU': FCCU,
+        #         'BCCU': BCCU,
+        #         'Ppenalty': Ppenalty,
+        #         'Qpenalty': Qpenalty,
+        #         'Qmethanol': Qmethanol
+        #     })
+    bids.sort(key=lambda x: x['bid'])
+
 
     output = {
         # mass_taxed_granulates :
