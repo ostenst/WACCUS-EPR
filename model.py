@@ -121,7 +121,7 @@ def levelize_kEUR(CAPEX, annual_CO2, x):
     CAPEX_lev = CAPEX_annual / annual_CO2 * 1000  # [EUR/tCO2]
     return CAPEX_lev
 
-def truck_cost(annual_CO2, distance, trucks_df):
+def truck_cost(annual_CO2, distance, trucks_df, x):
     """Get interpolated truck cost for given mass and distance using 2D interpolation"""
 
     masses = trucks_df['mass'].values
@@ -141,7 +141,7 @@ def truck_cost(annual_CO2, distance, trucks_df):
     else:
         # Use linear interpolation
         truck_cost = griddata(points, costs, (annual_CO2, distance), method='linear')
-    return truck_cost
+    return truck_cost * (1 + x["truck_uncertain"]) # [EUR/tCO2]
 
 def loading_cost(annual_CO2, x):
     """Estimate CAPEX of loading infrastructure based on a 150 ktCO2/yr reference"""
@@ -155,12 +155,49 @@ def pipeline_cost(annual_CO2, pipeline_length, x):
     nCO2 = mCO2/44                          # [kmolCO2/s]
     VCO2 = nCO2*22.4                        # [m3CO2/s] assuming ideal gas at standard conditions
     vCO2 = 16                               # [m/s] [Tharun, 2025] check paper "Enhancing early ..." and Appendix
-    Mcomp = 1.2 # [-] margin
-    Cfcomp = 568 # [EUR/m2]
+    Mcomp = 1.2                             # [-] margin
+    Cfcomp = 568                            # [EUR/m2]
     CAPEX_pipeline = (2*np.pi*((VCO2/vCO2)/np.pi)**0.5 * (pipeline_length*Mcomp)) * Cfcomp # [EUR2015] [Tharun, 2025]
     CAPEX_pipeline = CAPEX_pipeline * x["CEPCI"] / 1000 # [kEUR]
     CAPEXlev_pipeline = levelize_kEUR(CAPEX_pipeline, annual_CO2, x) # [EUR/tCO2]
     return CAPEXlev_pipeline
+
+def train_cost(annual_CO2, rail_distance, x):
+    """Rail distance in [km], returns levelized CAPEX in [EUR/tCO2]"""
+    speed = 60                                                      # [km/h]
+    unload_time = 5                                                 # [h]
+    cycle_time = (rail_distance/speed + unload_time) * 2            # [h]
+    train_capacity = 15 * 60                                        # [tCO2/train] @15 wagons
+    train_capacity /= cycle_time                                    # [tCO2/h] 
+
+    CAPEX_train = x["CAPEXref_train"]                               # [EUR]
+    CAPEXlev_train = levelize_kEUR(CAPEX_train/1000, annual_CO2, x) # [EUR/tCO2]
+    OPEX_train = x["OPEXfix"]*CAPEX_train + 0.0269*(train_capacity*(rail_distance*2*365)) # [EUR/yr] 1 roundtrip per day is more than enough!
+    OPEX_train = OPEX_train / annual_CO2                            # [EUR/tCO2]
+
+    return (CAPEXlev_train + OPEX_train) * (1 + x["train_uncertain"]) # [EUR/tCO2]
+
+def ship_cost(annual_CO2, city, ship_distance, shipping_df, x, optimism="optimist"):
+    """Ship distance in [km], returns levelized CAPEX in [EUR/tCO2]"""
+    if city == "Stockholm":
+        mt_capacity = x["stockholm"]
+    elif city == "Malmo":
+        mt_capacity = x["malmo"]
+    elif city == "Goteborg":
+        mt_capacity = x["gothenburg"]
+    else:
+        mt_capacity = 0.5
+
+    column_name = f"{optimism}_{mt_capacity}Mt" # Determines what shipping capacity is used
+    
+    # Sort by distance for proper interpolation
+    sorted_df = shipping_df.sort_values('distance')
+    distances = sorted_df['distance'].values
+    costs = sorted_df[column_name].values
+    result = np.interp(ship_distance, distances, costs)
+
+    shipping_cost = result * (1 + x["ship_uncertain"]) # [EUR/tCO2]
+    return shipping_cost
 
 def plan_CCS(plant, c, x, l):
     # burn fuel and capture/condition CO2
@@ -202,13 +239,49 @@ def plan_CCS(plant, c, x, l):
     # Calculate transport costs
     if plant['Truck_distance'] is not None and not pd.isna(plant['Truck_distance']):
         cost_loading = loading_cost(annual_CO2, x)                                  # [EUR/tCO2]
-        cost_truck = truck_cost(annual_CO2, plant['Truck_distance'], c["truck_df"]) # [EUR/tCO2]
+        cost_truck = truck_cost(annual_CO2, plant['Truck_distance'], c["truck_df"], x) # [EUR/tCO2]
 
     if plant['Pipeline_distance'] is not None and not pd.isna(plant['Pipeline_distance']):
         cost_pipeline = pipeline_cost(annual_CO2, plant['Pipeline_distance'], x)    # [EUR/tCO2]
 
-    # NEXT: IMPLEMENT TRAIN AND SHIP COSTS
+    if plant['Rail_distance'] is not None and not pd.isna(plant['Rail_distance']):
+        cost_loading = loading_cost(annual_CO2, x)                                  # [EUR/tCO2]
+        cost_rail = train_cost(annual_CO2, plant['Rail_distance'], x)                # [EUR/tCO2]
 
+    if plant['Oygarden_distance'] is not None and not pd.isna(plant['Oygarden_distance']):
+        if x["storage"] == "oygarden":
+            distance = plant['Oygarden_distance']
+        if x["storage"] == "kalundborg":
+            distance = plant['Kalundborg_distance']
+        cost_ship = ship_cost(annual_CO2, plant["City"], distance, c["shipping_df"], x)  # [EUR/tCO2]
+
+    print("\nPlant:", plant["Name"])
+    if 'cost_loading' in locals():
+        print("Cost loading:", cost_loading)
+    if 'cost_truck' in locals():
+        print("Cost truck:", cost_truck)
+    if 'cost_pipeline' in locals():
+        print("Cost pipeline:", cost_pipeline)
+    if 'cost_rail' in locals():
+        print("Cost rail:", cost_rail)
+    if 'cost_ship' in locals():
+        print("Cost ship:", cost_ship)
+    
+    total_cost = 0
+    if 'cost_loading' in locals():
+        total_cost += cost_loading
+    if 'cost_truck' in locals():
+        total_cost += cost_truck
+    if 'cost_pipeline' in locals():
+        total_cost += cost_pipeline
+    if 'cost_rail' in locals():
+        total_cost += cost_rail
+    if 'cost_ship' in locals():
+        total_cost += cost_ship
+    print("Summed transport cost:", total_cost)
+
+    print("\n YEEES TRANSPORT DONE! CONTINUE WITH BIDS :) ")
+    print("Note: we disregard criticism to add interim storage/tankers for trucks and trains! These are within the +-15percent uncertainty!")
 
     # # Construct a reversed auction bid
     # CAC = OPEX + levelized_CAPEX + transport_cost                        # [EUR/t]
@@ -280,11 +353,11 @@ def WACCUS_EPR(
     COP = 3,                # [MWth/MWel]
     heat_optimism = 0.70,   # [0,1] assumed % of waste heat that can be recovered to DH
 
-    CAPEXref_capture = 3550*0.09*1000, # [MNOK]->[kEUR] @400 ktCO2/yr [Gassnova, Demonstrasjon av Fullskala CO2-Håndtering - Rapport for Avsluttet Forprosjekt]
+    CAPEXref_capture = 3550*0.09*1000,  # [MNOK]->[kEUR] @400 ktCO2/yr [Gassnova, Demonstrasjon av Fullskala CO2-Håndtering - Rapport for Avsluttet Forprosjekt]
     CAPEXref_H2 = 550,                  # [kEUR/MWe] [Danish Agency Excel Renewable Fuels AEC100MW]
     CAPEXref_synthesis = 1.8749,        # [MEUR] [Danish Renewable Fuels PDF has a power function of CAPEX_synthesis. Fig4, p.186.] 
-    CAPEXref_loading = 63000000,          # [SEK*] @150 ktCO2/yr excluding railway track [Koldioxid på tåg, 2024]
-    CAPEXref_train = 86140000,          # [EUR*] an oversized train @15 wagons, cost = 4.98 *10**6 + 242*15 *10**3 [MSc Gunnarsson, 2025]
+    CAPEXref_loading = 63000000,        # [SEK*] @150 ktCO2/yr excluding railway track [Koldioxid på tåg, 2024]
+    CAPEXref_train = 8610000,           # [EUR*] an oversized train @15 wagons, cost = 4.98 *10**6 + 242*15 *10**3 [MSc Gunnarsson, 2025]
     k = 0.67,                           # [-] [Stenström, 2025] assumed economy-of-scale factor
     CEPCI = 900,                        # [-] [University of Manchester, 2025] applies to reference CAPEX values
     
@@ -301,9 +374,9 @@ def WACCUS_EPR(
     ship_uncertain = 0.10,  # [-] [-0.15,0.15]
     truck_uncertain = 0.10, # [-] [-0.15,0.15]
     train_uncertain = 0.10, # [-] [-0.15,0.15]
-    stockholm = 1,          # [Mt/yr] [1,2,3] 
-    malmo = 0.5,            # [Mt/yr] [0.5,1,2] 
-    gothenburg = 0.5,       # [Mt/yr] [0.5,1,2] 
+    stockholm = 2,          # [Mt/yr] [1,2,3] 
+    malmo = 1,              # [Mt/yr] [0.5,1,2] 
+    gothenburg = 1,         # [Mt/yr] [0.5,1,2] 
     storage = "oygarden",   # ["oygarden", "kalundborg"]
 
     # levers

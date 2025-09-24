@@ -246,7 +246,7 @@ CAPEX_train = 4.98 *10**6 + 242*15 *10**3 # [EUR]
 annualized_train = CAPEX_train * r * (1 + r)**n / ((1 + r)**n - 1) # [EUR/yr]
 levelized_train = annualized_train / annual_CO2 *11 # [EUR/tCO2] =>[SEK/tCO2]
 # print("levelized_train:", levelized_train)
-OPEX_train = 0.04*CAPEX_train + 0.0269*(15*60*(rail_distance*2)) # [EUR]
+OPEX_train = 0.04*CAPEX_train + 0.0269*(15*60*(rail_distance*2)) # [EUR] BUG: the rail distance should be over a whole year?
 OPEX_train = OPEX_train / annual_CO2 *11# [EUR/tCO2] =>[SEK/tCO2]
 # print("OPEX_train:", OPEX_train)
 
