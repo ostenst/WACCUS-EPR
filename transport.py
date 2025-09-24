@@ -5,49 +5,70 @@ from sklearn.linear_model import LinearRegression
 from scipy.interpolate import griddata
 
 
+def shipping_adjustment(df, scaling=0.67, debug=False):
+    """
+    Adjust shipping costs by adding 0.5Mt capacity data and extrapolating 
+    costs for 1st and 2nd shortest distances using linear regression.
+    
+    Args:
+        df: DataFrame with shipping cost data
+        debug: If True, print debug information
+    
+    Returns:
+        Adjusted DataFrame with extrapolated values
+    """
+    if debug:
+        print("Starting shipping adjustment...")
+    
+    # Add shipping costs for 0.5Mt
+    capex_reference = df['optimist_1Mt']*1 # absolute costs for 1Mt
+    capex_optimist = capex_reference * (0.5/1)**scaling
+    df['optimist_0.5Mt'] = capex_optimist / 0.5 # specific costs for 0.5Mt
+
+    capex_reference = df['pessimist_1Mt']*1 
+    capex_pessimist = capex_reference * (0.5/1)**scaling
+    df['pessimist_0.5Mt'] = capex_pessimist / 0.5 
+
+    column_order = ['distance', 'optimist_0.5Mt', 'pessimist_0.5Mt', 'optimist_1Mt', 'pessimist_1Mt', 
+                    'optimist_2Mt', 'pessimist_2Mt', 'optimist_3Mt', 'pessimist_3Mt']
+    shipping_df = df[column_order]
+
+    # Extrapolate costs for 1st and 2nd shortest distances using linear regression
+    # Sort by distance to get shortest distances first
+    shipping_sorted = shipping_df.sort_values('distance').reset_index(drop=True)
+
+    # Use 3rd-6th shortest distances (indices 2-5) to predict 1st-2nd (indices 0-1)
+    train_distances = shipping_sorted['distance'].iloc[2:6].values.reshape(-1, 1)
+    target_distances = shipping_sorted['distance'].iloc[0:2].values.reshape(-1, 1)
+
+    for mt in [0.5, 1, 2, 3]:
+        for scenario in ['optimist', 'pessimist']:
+            column = f"{scenario}_{mt}Mt"
+            # Train on 3rd-6th distances
+            train_costs = shipping_sorted[column].iloc[2:6].values
+            reg = LinearRegression()
+            reg.fit(train_distances, train_costs)
+            predicted_costs = reg.predict(target_distances)
+            
+            # Update the dataframe - hard code replaced!
+            shipping_sorted.loc[0, column] = predicted_costs[0]
+            shipping_sorted.loc[1, column] = predicted_costs[1]
+
+    shipping_df = shipping_sorted.sort_index()
+
+    if debug:
+        print("Debug - Extrapolated shipping costs:")
+        print(shipping_df[['distance', 'optimist_0.5Mt', 'pessimist_0.5Mt']].round(2))
+    
+    return shipping_df
+
+
 plants_df = pd.read_csv('data/plants.csv')
 df = pd.read_csv('data/shipping_costs.csv')
 trucks = pd.read_csv('data/truck_costs.csv')
 
-# Add shipping costs for 0.5Mt
-capex_reference = df['optimist_1Mt']*1 # absolute costs for 1Mt
-capex_optimist = capex_reference * (0.5/1)**0.7
-df['optimist_0.5Mt'] = capex_optimist / 0.5 # specific costs for 0.5Mt
-
-capex_reference = df['pessimist_1Mt']*1 
-capex_pessimist = capex_reference * (0.5/1)**0.7
-df['pessimist_0.5Mt'] = capex_pessimist / 0.5 
-
-column_order = ['distance', 'optimist_0.5Mt', 'pessimist_0.5Mt', 'optimist_1Mt', 'pessimist_1Mt', 
-                'optimist_2Mt', 'pessimist_2Mt', 'optimist_3Mt', 'pessimist_3Mt']
-shipping_df = df[column_order]
-
-# Extrapolate costs for 1st and 2nd shortest distances using linear regression
-# Sort by distance to get shortest distances first
-shipping_sorted = shipping_df.sort_values('distance').reset_index(drop=True)
-
-# Use 3rd-6th shortest distances (indices 2-5) to predict 1st-2nd (indices 0-1)
-train_distances = shipping_sorted['distance'].iloc[2:6].values.reshape(-1, 1)
-target_distances = shipping_sorted['distance'].iloc[0:2].values.reshape(-1, 1)
-
-for mt in [0.5, 1, 2, 3]:
-    for scenario in ['optimist', 'pessimist']:
-        column = f"{scenario}_{mt}Mt"
-        # Train on 3rd-6th distances
-        train_costs = shipping_sorted[column].iloc[2:6].values
-        reg = LinearRegression()
-        reg.fit(train_distances, train_costs)
-        predicted_costs = reg.predict(target_distances)
-        
-        # Update the dataframe - hard code replaced!
-        shipping_sorted.loc[0, column] = predicted_costs[0]
-        shipping_sorted.loc[1, column] = predicted_costs[1]
-
-shipping_df = shipping_sorted.sort_index()
-
-# Debug: Print the extrapolated values
-print("\nDebug - Extrapolated shipping costs:")
-print(shipping_df[['distance', 'optimist_0.5Mt', 'pessimist_0.5Mt']].round(2))
+# Apply shipping adjustment
+shipping_df = shipping_adjustment(df, scaling=0.67, debug=True)
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
 
 # Plot optimistic scenarios

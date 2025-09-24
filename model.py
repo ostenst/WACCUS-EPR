@@ -7,943 +7,9 @@ import matplotlib.pyplot as plt
 import searoute as sr
 import CoolProp.CoolProp as CP
 
+def get_CoolProp():
 
-def cost_transport():
     """
-    Creates linear regression models for transport costs based on distance.
-    Converts costs from SEK to EUR internally.
-    
-    Returns:
-        dict: Dictionary containing linear regression models for different scenarios (all costs in EUR):
-            Keys: 'optimist_1Mt', 'pessimist_1Mt', 'optimist_2Mt', 'pessimist_2Mt', 'optimist_3Mt', 'pessimist_3Mt'
-    """
-    # Read transport costs data
-    df = pd.read_csv("data/shipping_costs.csv")
-    
-    # Convert costs from SEK to EUR
-    cost_columns = ['optimist_1Mt', 'pessimist_1Mt', 'optimist_2Mt', 
-                   'pessimist_2Mt', 'optimist_3Mt', 'pessimist_3Mt']
-    df[cost_columns] = df[cost_columns] * SEK_TO_EUR
-    
-    # Create linear regression models for each scenario
-    transport_costs = {}
-    r2_scores = {}
-    
-    for scenario in cost_columns:
-        # Prepare data for regression
-        X = df['distance'].values.reshape(-1, 1)
-        y = df[scenario].values
-        
-        # Create and fit the model
-        model = LinearRegression()
-        model.fit(X, y)
-        
-        # Store the model
-        transport_costs[scenario] = model
-        
-        # Calculate R² score
-        r2_scores[scenario] = model.score(X, y)
-    
-    return transport_costs, r2_scores, df
-
-def precalculate_sea_distances():
-    """
-    Read pre-calculated sea distances between hubs and destinations from CSV.
-    
-    Returns:
-        dict: Dictionary with keys in format 'hub_destination' (e.g., 'stockholm_oygarden')
-             and values as distances in kilometers
-    """
-    # Read pre-calculated distances
-    df = pd.read_csv("data/hubs_destinations.csv")
-    
-    # Initialize dictionary to store distances
-    distances = {}
-    
-    # Create distance entries for each hub-destination pair
-    for _, row in df.iterrows():
-        # Add Oygarden destination
-        key_oygarden = f"{row['hub']}_oygarden"
-        distances[key_oygarden] = row['destination_oygarden']
-        
-        # Add Kalundborg destination
-        key_kalundborg = f"{row['hub']}_kalundborg"
-        distances[key_kalundborg] = row['destination_kalundborg']
-    
-    return distances  # [km]
-
-def sea_distance(origin, destination, distances_dict):
-    """
-    Get pre-calculated sea distance between hub and destination.
-    
-    Args:
-        origin (str): Name of the origin hub
-        destination (str): Name of the destination
-        distances_dict (dict): Dictionary of pre-calculated distances
-    
-    Returns:
-        float: Distance in kilometers
-    """
-    key = f"{origin.lower()}_{destination.lower()}"
-    return distances_dict[key]
-
-def estimate_CAPEX(mcaptured, x):
-    """
-    Estimate CAPEX for CO2 capture using power law model.
-    
-    Args:
-        mcaptured: CO2 capture rate [kg/s]
-        x: dictionary containing parameters
-        
-    Returns:
-        CAPEX: Total CAPEX [kEUR]
-        annualized_CAPEX: Annualized CAPEX [kEUR/yr]
-        levelized_CAPEX: Levelized CAPEX [EUR/t]
-    """
-    # Convert from [kg/s] to [kt/yr]
-    mannual = mcaptured/1000*3600 /1000 * x["FLH"]
-
-    # Calculate CAPEX using power law model
-    CAPEX = x["CAPEX_ref"] * (mannual / x["captured_ref"]) ** x["k"]  # [kEUR]
-    print("CELSIO method yields:",x["CAPEX_ref"] * (65*8000/1000 / x["captured_ref"]) ** x["k"] /1000, " MEUR")
-    CAPEX *= 1 + x["FOAK"]
-    
-    # Calculate levelized CAPEX using the levelize function
-    levelized_CAPEX = levelize(CAPEX, mcaptured, x)  # [EUR/t]
-    
-    # # Calculate annualized CAPEX for backward compatibility
-    # CRF = x["dr"] * (1 + x["dr"])**x["t"] / ((1 + x["dr"])**x["t"] - 1)
-    # annualized_CAPEX = CAPEX * CRF  # [kEUR/yr]
-    
-    return CAPEX, levelized_CAPEX
-
-def compression_energy(mcaptured, T1, P1, gas_type='CO2', n_stages=4, pressure_ratio=3.0, Tdiff=30, thermo_props=None, etais=0.8, printing=False):
-    """
-    Calculate compression energy and cooling requirements for multi-stage compression.
-    
-    Args:
-        mcaptured: Mass flow rate [kg/s]
-        T1: Initial temperature [K]
-        P1: Initial pressure [bar]
-        gas_type: Type of gas ('CO2' or 'H2')
-        n_stages: Number of compression stages
-        pressure_ratio: Pressure ratio per stage
-        Tdiff: Temperature difference for intercooling [K]
-        thermo_props: Dictionary of thermodynamic properties
-        etais: Isentropic efficiency [-]
-        printing: Whether to print the results
-    
-    Returns:
-        tuple: (Wcomp_list, Qcool_list, P_list, T_list)
-            Wcomp_list: List of compression work for each stage [MW]
-            Qcool_list: List of cooling requirements for each stage [MW]
-            P_list: List of pressures at each stage [bar]
-            T_list: List of temperatures at each stage [K]
-    """
-    Wcomp_list = []
-    Qcool_list = []
-    P_list = [P1]
-    T_list = [T1]
-    
-    T = T1
-    P = P1
-    
-    for stage in range(n_stages):
-        # Get properties at current temperature
-        kappa = get_property_at_temp(thermo_props, gas_type, T, 'kappa')
-        cp_in = get_property_at_temp(thermo_props, gas_type, T, 'cp')
-        
-        # Calculate next pressure
-        P_next = P * pressure_ratio
-        P_list.append(P_next)
-        
-        # Calculate isentropic and actual temperatures
-        T_isentropic = T * (P_next/P)**((kappa-1)/kappa)
-        T_actual = T + (T_isentropic - T)/etais
-        T_list.append(T_actual)
-        
-        # Get properties at actual temperature
-        cp_out = get_property_at_temp(thermo_props, gas_type, T_actual, 'cp')
-        
-        # Calculate work and cooling
-        Wcomp = mcaptured * (cp_in + cp_out)/2 * (T_actual - T)  # [kJ/s]
-        
-        # Calculate cooling only if not the last stage
-        Qcool = 0 if stage == n_stages - 1 else mcaptured * cp_out * (T_actual - (T + Tdiff))    # [kJ/s] NOTE: Compressor temps should not increase... but it does in Beiron?
-        
-        # Store results
-        Wcomp_list.append(Wcomp/1000)  # Convert to MW
-        Qcool_list.append(Qcool/1000)  # Convert to MW
-        
-        # Update temperature for next stage
-        T = T + Tdiff
-        P = P_next
-    
-    if printing:
-        # Print summary table
-        print(f"\n{gas_type} Compression Summary:")
-        print("Stage | Pressure [bar] | Temperature [°C] | Work [MW] | Cooling [MW]")
-        print("------|---------------|------------------|-----------|-------------")
-        for i in range(len(Wcomp_list)):
-            print(f"{i+1:5d} | {P_list[i]:13.1f} | {T_list[i]-273.15:16.1f} | {Wcomp_list[i]:9.1f} | {Qcool_list[i]:11.1f}")
-        print(f"Final | {P_list[-1]:13.1f} | {T_list[-1]-273.15:16.1f} | {'-':9s} | {'-':11s}")
-        print(f"\nTotal compression work: {sum(Wcomp_list):.1f} MW")
-        print(f"Total cooling required: {sum(Qcool_list):.1f} MW")
-    
-    return Wcomp_list, Qcool_list, P_list, T_list
-
-def compression_cost(Wcomp_list, gas_type='CO2', printing=False):
-    """
-    Calculate the cost of compression stages using coefficients from Deng's paper.
-    
-    Args:
-        Wcomp_list: List of compression work for each stage [MW]
-        gas_type: Type of gas ('CO2' or 'H2')
-    
-    Returns:
-        tuple: (total_cost, stage_costs)
-            total_cost: Total cost of compression [EUR]
-            stage_costs: List of costs for each stage [EUR]
-    """
-    # Read coefficients from CSV
-    df = pd.read_csv("data/compression_costs.csv", index_col=0)
-    
-    # Initialize lists
-    stage_costs = []
-    
-    # Calculate cost for each stage
-    for i, Wstage in enumerate(Wcomp_list):
-        # Convert MW to kW
-        Wstage_kW = Wstage * 1000
-
-        # Get coefficients for this stage
-        a = df.loc['Coefficient a', f'Stage {i+1}']
-        b = df.loc['Coefficient b', f'Stage {i+1}']
-        c = df.loc['Coefficient c', f'Stage {i+1}']
-        
-        # Calculate cost using these equations [Deng, 2019]:
-        if i == 3:  # 4th stage (0-based indexing) has different equation
-            cost = a + b * Wstage_kW + c * Wstage_kW**0.5
-        else:
-            cost = a + b * Wstage_kW**1.5 + c * Wstage_kW**2
-        stage_costs.append(cost)
-    
-    total_cost = sum(stage_costs)
-    
-    # Print results
-    if printing:
-        print(f"\n{gas_type} Compression Costs:")
-        print("Stage | Work [MW] | Cost [EUR]")
-        print("------|-----------|------------")
-        for i, (Wstage, cost) in enumerate(zip(Wcomp_list, stage_costs)):
-            print(f"{i+1:5d} | {Wstage:9.1f} | {cost:10.0f}")
-        print(f"Total | {sum(Wcomp_list):9.1f} | {total_cost:10.0f}")
-        
-    return total_cost, stage_costs
-
-def levelize(CAPEX, mcaptured, x):
-    """
-    Levelize CAPEX to EUR/tCO2.
-    
-    Args:
-        CAPEX: Capital expenditure [kEUR]
-        mcaptured: CO2 capture rate [kg/s]
-        x: dictionary containing parameters
-        
-    Returns:
-        float: Levelized CAPEX in EUR/tCO2
-    """
-    # Calculate annualized CAPEX using CRF
-    CRF = x["dr"] * (1 + x["dr"])**x["t"] / ((1 + x["dr"])**x["t"] - 1)
-    annualized_CAPEX = CAPEX * CRF  # [kEUR/yr]
-    
-    # Convert to per-ton costs
-    annual_CO2 = mcaptured/1000*3600 * x["FLH"]  # [tCO2/yr]
-    levelized_CAPEX = annualized_CAPEX / annual_CO2 * 1000  # [EUR/tCO2]
-    
-    return levelized_CAPEX
-
-def plot_CCU_CHP(plant, P, Qdh, Preb, Pcapture, PH2, Wcomp_CO2, Wcomp_H2, Qdhreb, Qhex, Qcool_CO2, Qrec_H2, Qcool_H2, Qdistill):
-    """
-    Create a bar plot showing power and heat changes in the CCU process.
-    
-    Args:
-        plant: Dictionary containing plant data
-        P: Final power output [MW]
-        Qdh: Final district heating output [MW]
-        Preb: Power for reboiler [MW]
-        Pcapture: Power for capture [MW]
-        PH2: Power for H2 production [kW]
-        Wcomp_CO2: CO2 compression power [MW]
-        Wcomp_H2: H2 compression power [MW]
-        Qdhreb: Heat for reboiler [MW]
-        Qhex: Heat from heat exchanger [MW]
-        Qcool_CO2: CO2 cooling heat [MW]
-        Qrec_H2: H2 recovery heat [kW]
-        Qcool_H2: H2 cooling heat [MW]
-        Qdistill: Distillation heat [MW]
-    """
-    # Create figure with two subplots
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
-    
-    # Define colors
-    power_colors = {
-        'Initial': '#1f77b4',  # Blue
-        'Final': '#2ca9b8',    # Teal
-        'Reboiler': '#9b4dca', # Purple
-        'Power Capture Plant': '#4d79a6',  # Darker blue
-        'H2 Production': '#5d9cec', # Light blue
-        'CO2 Compression': '#7fb3d5', # Sky blue
-        'H2 Compression': '#a8d8ea'   # Light teal
-    }
-    
-    heat_colors = {
-        'Initial': '#d62728',  # Red
-        'Final': '#ff7f0e',    # Orange
-        'Reboiler': '#9b4dca', # Purple (same as power reboiler)
-        'Direct HEX DH': '#e57373', # Light red
-        'CO2 Cooling': '#ef9a9a',    # Pink
-        'Electrolyzer Heat': '#ffab91',    # Light orange
-        'H2 Cooling': '#ffcc80',     # Peach
-        'Distillation Heat': '#ffe082'    # Light yellow
-    }
-    
-    # Add grid
-    ax1.grid(True, linestyle='--', alpha=0.3)
-    ax2.grid(True, linestyle='--', alpha=0.3)
-    
-    # Power balance plot
-    power_initial = plant["P"]
-    power_final = P
-    
-    # Create power bars
-    bars1 = ax1.bar(['Initial', 'Change', 'Final'], 
-            [power_initial, 0, power_final], 
-            color=[power_colors['Initial'], 'gray', power_colors['Final']])
-    
-    # Annotate initial and final power values
-    ax1.text(0, power_initial, f'{power_initial:.1f}', ha='center', va='bottom')
-    ax1.text(2, power_final, f'{power_final:.1f}', ha='center', va='bottom')
-    
-    # Create detailed power change bar
-    power_components = {
-        'Reboiler': -Preb,
-        'Power Capture Plant': -Pcapture,
-        'H2 Production': -PH2/1000,
-        'CO2 Compression': -Wcomp_CO2,
-        'H2 Compression': -Wcomp_H2
-    }
-    
-    bottom = 0
-    for component, value in power_components.items():
-        bar = ax1.bar('Change', value, bottom=bottom, label=component, color=power_colors[component])
-        # Annotate each component
-        if value != 0:
-            ax1.text(1, bottom + value/2, f'{value:.1f}', ha='center', va='center', color='white')
-        bottom += value
-    
-    # Annotate total change
-    total_change = sum(power_components.values())
-    ax1.text(1, total_change, f'{total_change:.1f}', ha='center', va='bottom')
-    
-    ax1.set_title('Power Balance')
-    ax1.set_ylabel('Power [MW]')
-    ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-    
-    # Heat balance plot
-    heat_initial = plant["Qdh"]
-    heat_final = Qdh
-    
-    # Create heat bars for initial and final states
-    bars2 = ax2.bar(['Initial', 'Change', 'Final'], 
-            [heat_initial, 0, heat_final], 
-            color=[heat_colors['Initial'], 'gray', heat_colors['Final']])
-    
-    # Annotate initial and final heat values
-    ax2.text(0, heat_initial, f'{heat_initial:.1f}', ha='center', va='bottom')
-    ax2.text(2, heat_final, f'{heat_final:.1f}', ha='center', va='bottom')
-    
-    # Create detailed heat change bar
-    heat_components_negative = {
-        'Reboiler': -Qdhreb,
-    }
-    
-    heat_components_positive = {
-        'Direct HEX DH': Qhex,
-        'CO2 Cooling': Qcool_CO2,
-        'Electrolyzer Heat': Qrec_H2/1000,
-        'H2 Cooling': Qcool_H2,
-        'Distillation Heat': Qdistill
-    }
-    
-    # Plot negative components first
-    bottom = 0
-    for component, value in heat_components_negative.items():
-        bar = ax2.bar('Change', value, bottom=bottom, label=component, color=heat_colors[component])
-        # Annotate each component
-        if value != 0:
-            ax2.text(1, bottom + value/2, f'{value:.1f}', ha='center', va='center', color='white')
-        bottom += value
-    
-    # Reset bottom to 0 for positive components
-    bottom = 0
-    for component, value in heat_components_positive.items():
-        bar = ax2.bar('Change', value, bottom=bottom, label=component, color=heat_colors[component])
-        # Annotate each component
-        if value != 0:
-            ax2.text(1, bottom + value/2, f'{value:.1f}', ha='center', va='center', color='white')
-        bottom += value
-    
-    # Annotate total change
-    total_change = sum(heat_components_negative.values()) + sum(heat_components_positive.values())
-    ax2.text(1, total_change, f'{total_change:.1f}', ha='center', va='bottom')
-    
-    ax2.set_title('Heat Balance')
-    ax2.set_ylabel('Heat [MW]')
-    ax2.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-    
-    plt.tight_layout()
-    
-    # Save figure at 600 dpi
-    fig.savefig('CCU_CHP_balance.png', dpi=600, bbox_inches='tight')
-    
-    return fig
-
-def plot_CCU_combined(plant, P, Qdh, Preb, Pcapture, PH2, Wcomp_CO2, Wcomp_H2, Qdhreb, Qhex, Qcool_CO2, Qrec_H2, Qcool_H2, Qdistill, Qmethanol):
-    """
-    Create a combined bar plot showing power and heat changes in the CCU process.
-    
-    Args:
-        plant: Dictionary containing plant data
-        P: Final power output [MW]
-        Qdh: Final district heating output [MW]
-        Preb: Power for reboiler [MW]
-        Pcapture: Power for capture [MW]
-        PH2: Power for H2 production [kW]
-        Wcomp_CO2: CO2 compression power [MW]
-        Wcomp_H2: H2 compression power [MW]
-        Qdhreb: Heat for reboiler [MW]
-        Qhex: Heat from heat exchanger [MW]
-        Qcool_CO2: CO2 cooling heat [MW]
-        Qrec_H2: H2 recovery heat [kW]
-        Qcool_H2: H2 cooling heat [MW]
-        Qdistill: Distillation heat [MW]
-        Qmethanol: Methanol production heat [MW]
-    """
-    # Create figure
-    fig, ax = plt.subplots(figsize=(15, 8))
-    
-    # Add grid
-    ax.grid(True, linestyle='--', alpha=0.3)
-    
-    # Define colors (same as before)
-    power_colors = {
-        'Initial': '#1f77b4',  # Blue
-        'Final': '#2ca9b8',    # Teal
-        'Reboiler': '#9b4dca', # Purple
-        'Power Capture Plant': '#4d79a6',  # Darker blue
-        'H2 Production': '#5d9cec', # Light blue
-        'CO2 Compression': '#7fb3d5', # Sky blue
-        'H2 Compression': '#a8d8ea'   # Light teal
-    }
-    
-    heat_colors = {
-        'Initial': '#d62728',  # Red
-        'Final': '#ff7f0e',    # Orange
-        'Reboiler': '#9b4dca', # Purple (same as power reboiler)
-        'Direct HEX DH': '#e57373', # Light red
-        'CO2 Cooling': '#ef9a9a',    # Pink
-        'Electrolyzer Heat': '#ffab91',    # Light orange
-        'H2 Cooling': '#ffcc80',     # Peach
-        'Distillation Heat': '#ffe082'    # Light yellow
-    }
-    
-    # Set up the x-axis positions
-    x_positions = ['Initial', 'Change', 'Final', 'Methanol']
-    x = np.arange(len(x_positions))
-    width = 0.35  # Width of the bars
-    
-    # Plot initial state
-    ax.bar(x[0] - width/2, plant["P"], width, label='Power', color=power_colors['Initial'])
-    ax.bar(x[0] + width/2, plant["Qdh"], width, label='Heat', color=heat_colors['Initial'])
-    
-    # Annotate initial values
-    ax.text(x[0] - width/2, plant["P"], f'{plant["P"]:.1f}', ha='center', va='bottom')
-    ax.text(x[0] + width/2, plant["Qdh"], f'{plant["Qdh"]:.1f}', ha='center', va='bottom')
-    
-    # Plot change components
-    # Power components
-    power_components = {
-        'Reboiler': -Preb,
-        'Power Capture Plant': -Pcapture,
-        'H2 Production': -PH2,
-        'CO2 Compression': -Wcomp_CO2,
-        'H2 Compression': -Wcomp_H2
-    }
-    
-    bottom = 0
-    for component, value in power_components.items():
-        bar = ax.bar(x[1] - width/2, value, width, bottom=bottom, label=f'Power: {component}', color=power_colors[component])
-        # Annotate each component
-        if value != 0:
-            ax.text(x[1] - width/2, bottom + value/2, f'{value:.1f}', ha='center', va='center', color='white')
-        bottom += value
-    
-    # Heat components
-    heat_components_negative = {
-        'Reboiler': -Qdhreb,
-    }
-    
-    heat_components_positive = {
-        'Direct HEX DH': Qhex,
-        'CO2 Cooling': Qcool_CO2,
-        'Electrolyzer Heat': Qrec_H2/1000,
-        'H2 Cooling': Qcool_H2,
-        'Distillation Heat': Qdistill
-    }
-    
-    # Plot negative heat components
-    bottom = 0
-    for component, value in heat_components_negative.items():
-        bar = ax.bar(x[1] + width/2, value, width, bottom=bottom, label=f'Heat: {component}', color=heat_colors[component])
-        # Annotate each component
-        if value != 0:
-            ax.text(x[1] + width/2, bottom + value/2, f'{value:.1f}', ha='center', va='center', color='white')
-        bottom += value
-    
-    # Plot positive heat components
-    bottom = 0
-    for component, value in heat_components_positive.items():
-        bar = ax.bar(x[1] + width/2, value, width, bottom=bottom, label=f'Heat: {component}', color=heat_colors[component])
-        # Annotate each component
-        if value != 0:
-            ax.text(x[1] + width/2, bottom + value/2, f'{value:.1f}', ha='center', va='center', color='white')
-        bottom += value
-    
-    # Plot final state
-    ax.bar(x[2] - width/2, P, width, color=power_colors['Final'])
-    ax.bar(x[2] + width/2, Qdh, width, color=heat_colors['Final'])
-    
-    # Annotate final values
-    ax.text(x[2] - width/2, P, f'{P:.1f}', ha='center', va='bottom')
-    ax.text(x[2] + width/2, Qdh, f'{Qdh:.1f}', ha='center', va='bottom')
-    
-    # Plot methanol production
-    ax.bar(x[3] - width/2, Qmethanol, width, color='red', label='Methanol Production', alpha=0.5)
-    ax.text(x[3] - width/2, Qmethanol, f'{Qmethanol:.1f}', ha='center', va='bottom')
-    ax.bar(x[3] + width/2, -((plant["Qwaste"]+abs(P))-(Qdh+Qmethanol)), width, color='red', label='Methanol losses', hatch='////', alpha=0.5)
-    ax.text(x[3] + width/2, -((plant["Qwaste"]+abs(P))-(Qdh+Qmethanol)), f'{((plant["Qwaste"]+abs(P))-(Qdh+Qmethanol)):.1f}', ha='center', va='bottom')
-    
-    # Customize the plot
-    ax.set_ylabel('Energy [MW]')
-    ax.set_title(f'{plant["Name"]} - Waste CHP and methanol balance [MW]')
-    ax.set_xticks(x)
-    ax.set_xticklabels(x_positions)
-    
-    # Add a horizontal line at y=0
-    ax.axhline(y=0, color='black', linestyle='-', alpha=0.3)
-    
-    # Create custom legend
-    from matplotlib.patches import Patch
-    legend_elements = [
-        Patch(facecolor=power_colors['Initial'], label='Power: Initial'),
-        Patch(facecolor=heat_colors['Initial'], label='Heat: Initial'),
-        Patch(facecolor=power_colors['Final'], label='Power: Final'),
-        Patch(facecolor=heat_colors['Final'], label='Heat: Final'),
-        Patch(facecolor=power_colors['Reboiler'], label='Reboiler (Power & Heat)'),
-        Patch(facecolor='red', label='Methanol Production', alpha=0.5),
-        Patch(facecolor='red', label='Methanol losses', hatch='////', alpha=0.5),
-    ]
-    
-    # Add power components to legend
-    for component in ['Power Capture Plant', 'H2 Production', 'CO2 Compression', 'H2 Compression']:
-        legend_elements.append(Patch(facecolor=power_colors[component], label=f'Power: {component}'))
-    
-    # Add heat components to legend
-    for component in ['Direct HEX DH', 'CO2 Cooling', 'Electrolyzer Heat', 'H2 Cooling', 'Distillation Heat']:
-        legend_elements.append(Patch(facecolor=heat_colors[component], label=f'Heat: {component}'))
-    
-    ax.legend(handles=legend_elements, bbox_to_anchor=(1.05, 1), loc='upper left')
-    
-    plt.tight_layout()
-    
-    # Save figure at 600 dpi
-    fig.savefig('CCU_combined_balance.png', dpi=600, bbox_inches='tight')
-    
-    return fig
-
-def plan_CCU(plant, x, plot_single=False):
-    # burn fuel
-    mfuel = plant["Qwaste"] / (x["LHV"]/3600) /3600  # [kgf/s]
-    mCO2 = mfuel* x["Ccontent"] * 44/12              # [kgCO2/s]
-
-    # capture and compress CO2
-    mcaptured = mCO2 * 0.90                          # [kgCO2/s]
-    Qreb = mcaptured * x["qreb"]                     # [MW]
-    Pcapture = 0.1 * mcaptured/1000*3600             # [MW] [Beiron, 2022]
-    Qhex = 0.64 * Qreb                               # [MW] [Beiron, 2022]
-    
-    T1 = 40 + 273.15  # Initial temperature [K] [Deng, 2019]
-    P1 = 1.0         # Initial pressure [bar]
-    Wcomp_list, Qcool_list, P_list, T_list = compression_energy( # Setting target p and T according to [Beiron, 2025 (unpublished)]
-        mcaptured=mcaptured,
-        T1=T1,
-        P1=P1,
-        gas_type='CO2',
-        n_stages=3,
-        pressure_ratio=3.7,
-        Tdiff=30,
-        thermo_props=x["thermo_props"],
-        etais=x["etais"],
-        printing=False
-    )
-    Wcomp_CO2 = sum(Wcomp_list)  # [MW]
-    cost_CO2, _ = compression_cost(Wcomp_list, 'CO2', printing=False)
-    Qcool_CO2 = sum(Qcool_list)  # [MW]
-
-    # produce H2 from AEL electrolyzer
-    Hi = 241.82             # [kJ/molH2] [Formelsamling]
-    nCO2 = mcaptured/44     # [kmol/s]
-    nH2 = nCO2 * 3          # [kmol/s] needed
-    QH2 = nH2 * Hi          # [MW] 
-    PH2 = QH2/0.699         # [MW] Table2.1 MSc Jacobsson & Palmgren, 2025
-    Qrec_H2 = 0.154 * PH2   # [MW] [AEL tech, Fig2.1 MSc Jacobsson & Palmgren, 2025] OR [Danish Renwable Fuels 100MW AEC] NOTE: Optimistic
-
-    # compress the H2
-    mH2 = nH2 * 2           # [kg/s] 
-    T1 = 75 + 273.15        # [AEL tech, Table2.1 MSc Jacobsson & Palmgren, 2025]
-    P1 = 20                 # Initial pressure [bar], assumed based on [Danish]
-    Wcomp_list, Qcool_list, P_list, T_list = compression_energy(
-        mcaptured=mH2,
-        T1=T1,
-        P1=P1,
-        gas_type='H2',
-        n_stages=2,
-        pressure_ratio=1.6,
-        Tdiff=60,
-        thermo_props=x["thermo_props"],
-        etais=x["etais"],
-        printing=False
-    )
-    Wcomp_H2 = sum(Wcomp_list)  # [MW]
-    cost_H2, _ = compression_cost(Wcomp_list, 'H2', printing=False)
-    Qcool_H2 = sum(Qcool_list)  # [MW]
-
-    # produce methanol and extra DH - check Danish Agency for method - we treat the whole synthesis plant as a single unit
-    Qsteam_synthesis = 0.08/(1-0.08) * QH2 # [MW] [Danish Renewable Fuels Fig3, section 5.2 Methanol from Hydrogen and Carbon Dioxide]
-    Qmethanol = 0.78 * (QH2 + Qsteam_synthesis) # [MW]
-    Qdistill = 0.20 * (QH2 + Qsteam_synthesis) # [MW] NOTE: Optimistic assumption on heat recovery, from condensers at distillation
-    Qloss = 0.02 * (QH2 + Qsteam_synthesis) # [MW] 
-    LHV_methanol = 19.8      # [MJ/kg] [Formelsamling]
-    m_methanol = Qmethanol/LHV_methanol /1000*3600*24 # [t/day]
-
-    # penalize CHP and recover Qdh
-    P = plant["P"] * (1 - Qreb/plant["Qwaste"] - Qsteam_synthesis/plant["Qwaste"])      # assuming live steam is used for reboiler AND synthesis plant
-    Preb = plant["P"]*(Qreb+Qsteam_synthesis)/plant["Qwaste"] # power lost to reboiler?
-    P = P - Pcapture - PH2 - Wcomp_CO2 - Wcomp_H2
-
-    Qdh = plant["Qdh"] * (1 - Qreb/plant["Qwaste"] - Qsteam_synthesis/plant["Qwaste"])
-    Qdhreb = plant["Qdh"]*(Qreb+Qsteam_synthesis)/plant["Qwaste"]
-    Qdh = Qdh + Qcool_CO2 + Qcool_H2 + (Qhex + Qrec_H2 + Qdistill)*x["heat_optimism"] # [MW] the cooling is NECESSARY, the others are not.
-
-    Ppenalty = (plant["P"] - P) * x["FLH"]        # [MWh/yr] probably very positive
-    Qpenalty = (plant["Qdh"] - Qdh) * x["FLH"]      # [MWh/yr] probably negative
-    Qmethanol = Qmethanol * x["FLH"]                # [MWh/yr] positive
-
-    # print("These KPIs are similar to Beiron, if no recovery from Qhex, Qrec_H2, Qdistill:")
-    # KPI1 = Qmethanol/x["FLH"]*1000 / (plant["Qwaste"] + (-P)) # [MW/MW]
-    # KPI2 = (Qmethanol/x["FLH"]*1000 + Qdh)/ (plant["Qwaste"] + (-P)) # [MW/MW]
-    # KPI21 = 1 - ((plant["Qwaste"]+abs(P))-(Qdh+Qmethanol/x["FLH"]*1000)) / (plant["Qwaste"] + (-P)) # [MW/MW]
-    # KPI3 = (-P) / ((plant["P"] * (1 - Qreb/plant["Qwaste"])) + (plant["Qdh"] * (1 - Qreb/plant["Qwaste"])) + (Qmethanol/x["FLH"]*1000)) # [MW/MW]
-    # KPI4 = (-P) / (Qmethanol/x["FLH"]*1000)
-    # KPI5 = ((plant["Qwaste"]+abs(P))-(Qdh+Qmethanol/x["FLH"]*1000)) / (Qmethanol/x["FLH"]*1000)
-
-    # print(f"KPI1: {KPI1:.2f}")
-    # print(f"KPI2: {KPI2:.2f}")
-    # print(f"KPI2: {KPI21:.2f}")
-    # print(f"KPI3: {KPI3:.2f}")
-    # print(f"KPI4: {KPI4:.2f}")
-    # print(f"KPI5: {KPI5:.2f}")
-
-    # Estimate CAPEX and OPEX of all units
-    CAPEX, levelized_CAPEX = estimate_CAPEX(mcaptured, x)  # [kEUR, EUR/tCO2] NOTE: Includes compression/liq CAPEX...
-    OPEXfix = x["OPEXfix"] * CAPEX # [kEUR/yr] NOTE: check if should be *1000 or not?
-    CAPEX_H2 = x["CAPEX_H2_ref"] * PH2 # [kEUR] [Danish Agency Excel Renewable Fuels AEC100MW]  550kEUR/MWe
-    OPEX_H2 = x["OPEXfix"] * CAPEX_H2 # [kEUR/yr] could do separate OPEXfactors for CO2capture and H2 - but lets combine them :)
-
-    # CAPEX_synthesis = 1.09 * Qmethanol/x["FLH"] # [kEUR] # Danish Renewable Fuels PDF has a power function of CAPEX_synthesis. Fig4, p.186.
-    # print(plant["Name"],"\n", CAPEX_synthesis, "linear", np.round(Qmethanol/x["FLH"], 0), "MW", mCO2) linear model is bad! use power model
-    CAPEX_synthesis = x["CAPEX_synthesis_ref"] * m_methanol ** -0.315 *1000 # quoted accuracy: +-50%, at kEUR2020 (so use CEPCI?)
-    OPEX_synthesis = x["OPEXfix"] * CAPEX_synthesis # [kEUR/yr] However, these arrive at the same cost roughly: [Beiron, Grahn! Includes destillation probably]
-
-    levelized_CAPEX_H2 = levelize(CAPEX_H2, mcaptured, x)
-    levelized_CAPEX_synthesis = levelize(CAPEX_synthesis, mcaptured, x)
-    levelized_CAPEX_CO2_comp = levelize(cost_CO2/1000, mcaptured, x)  # Convert cost_CO2 from EUR to kEUR
-    levelized_CAPEX_H2_comp = levelize(cost_H2/1000, mcaptured, x)    # Convert cost_H2 from EUR to kEUR
-
-    annual_CO2 = mcaptured/1000*3600 * x["FLH"]  # [tCO2/yr]
-    levelized_OPEXfix = OPEXfix / annual_CO2 * 1000  # [EUR/tCO2]
-    levelized_OPEX_H2 = OPEX_H2 / annual_CO2 * 1000  # [EUR/tCO2]
-    levelized_OPEX_synthesis = OPEX_synthesis / annual_CO2 * 1000  # [EUR/tCO2]
-
-    # Summarize and bid
-    CAC = levelized_CAPEX + levelized_CAPEX_H2 + levelized_CAPEX_synthesis + levelized_OPEXfix + levelized_OPEX_H2 + levelized_OPEX_synthesis + levelized_CAPEX_CO2_comp + levelized_CAPEX_H2_comp
-
-    costs_power = Ppenalty*x["celc"] / annual_CO2 # [EUR/tCO2] 
-    revenues_heat = abs(Qpenalty)*x["celc"]*x["cheat"] / annual_CO2 # [EUR/tCO2] 
-    revenues_methanol = Qmethanol*3600/LHV_methanol /1000 * x["pmethanol"]  / annual_CO2 #[EUR/tCO2]
-    energy_revenues = revenues_heat + revenues_methanol - costs_power # [EUR/tCO2]
-    bid = CAC - energy_revenues # [EUR/tCO2]
-
-    fossil = plant["Fossil"] / plant["Total"]                           # [tfossil/t] share of fossil CO2
-    biogenic = 1 - fossil  
-    FCCU = annual_CO2 * fossil /1000                          # [ktCO2/yr]
-    BCCU = annual_CO2 * biogenic /1000                        # [ktCO2/yr]
-    # CCU = FCCU + BCCU                                                         # [ktCO2/yr]
-
-    if plot_single:
-        fig1 = plot_CCU_CHP(
-            plant=plant,
-            P=P,
-            Qdh=Qdh,
-            Preb=Preb,
-            Pcapture=Pcapture,
-            PH2=PH2,
-            Wcomp_CO2=Wcomp_CO2,
-            Wcomp_H2=Wcomp_H2,
-            Qdhreb=Qdhreb,
-            Qhex=Qhex,
-            Qcool_CO2=Qcool_CO2,
-            Qrec_H2=Qrec_H2,
-            Qcool_H2=Qcool_H2,
-            Qdistill=Qdistill
-        )
-        
-        fig2 = plot_CCU_combined(
-            plant=plant,
-            P=P,
-            Qdh=Qdh,
-            Preb=Preb,
-            Pcapture=Pcapture,
-            PH2=PH2,
-            Wcomp_CO2=Wcomp_CO2,
-            Wcomp_H2=Wcomp_H2,
-            Qdhreb=Qdhreb,
-            Qhex=Qhex,
-            Qcool_CO2=Qcool_CO2,
-            Qrec_H2=Qrec_H2,
-            Qcool_H2=Qcool_H2,
-            Qdistill=Qdistill,
-            Qmethanol=Qmethanol/x["FLH"]*1000
-        )
-
-    return FCCU, BCCU, bid, Ppenalty, Qpenalty, Qmethanol
-
-def plan_CCS(plant, x, transport_costs, sea_distances):
-    # burn fuel
-    mfuel = plant["Qwaste"] / (x["LHV"]/3600) /3600  # [kgf/s]
-    mCO2 = mfuel* x["Ccontent"] * 44/12              # [kgCO2/s]
-
-    # capture and condition CO2
-    mcaptured = mCO2 * 0.90                          # [kgCO2/s]
-    Qreb = mcaptured * x["qreb"]                     # [MW]
-    Pcapture = 0.1 * mcaptured/1000*3600             # [MW] [Beiron, 2022]
-    Pcondition = 0.37 * mcaptured                    # [MW] [Kumar, 2023] incl. CO2 conditioning
-
-    # penalize CHP
-    P = plant["P"] * (1 - Qreb/plant["Qwaste"])      # assuming live steam is used for reboiler
-    P = P - Pcapture - Pcondition
-    Qdh = plant["Qdh"] * (1 - Qreb/plant["Qwaste"])
-
-    # recover heat up to 100 % of original DH - use whatever power is available for HP
-    Qhex = 0.64 * Qreb                               # [MW] [Beiron, 2022]
-    Qdiff = plant["Qdh"] - (Qdh + Qhex)
-    if Qdiff < 0:
-        raise ValueError
-    else:
-        Whp = Qdiff / x["COP"]
-        if Whp > P: 
-            Whp = P
-    Qdh = Qdh + Qhex + Whp*x["COP"]
-    P -= Whp
-    Ppenalty = (plant["P"] - P) * x["FLH"] /1000     # [GWh/yr]
-    Qpenalty = (plant["Qdh"] - Qdh) * x["FLH"] /1000 # [GWh/yr]
-
-    # Estimate CAPEX
-    CAPEX, levelized_CAPEX = estimate_CAPEX(mcaptured, x)  # [kEUR, kEUR/yr, kEUR/t]
-
-    # Calculate transport cost using sea distance
-    distance = sea_distance(plant["hub"], x["destination"], sea_distances)  # [km]
-    # print("<<< Missing Truck/Rail/Harbor costs >>>")
-    # print(plant["hub"], x["destination"])
-    
-    hub_value = x[plant["hub"].lower()]              # Get the value (1, 2, or 3) for this hub name from x
-    scenario = f"{hub_value}Mt"                      # Convert to scenario name (1Mt, 2Mt, or 3Mt)
-    
-    scenario_type = "optimist" if x["transport_optimism"] else "pessimist"
-    scenario_key = f"{scenario_type}_{scenario}"
-    # print(scenario_key)
-    
-    transport_cost = transport_costs[scenario_key].predict([[distance]])[0]  # [EUR/t]
-    # print(f"Transport cost at {distance} km: {transport_cost:.2f} EUR/t")
-
-    # Estimate OPEX
-    OPEXfix = (CAPEX*1000 * x["OPEXfix"]) / (mcaptured/1000*3600 * x["FLH"])  # [EUR/t]
-    OPEXmakeup = x["makeup"] * x["camine"]                                    # [EUR/t]
-    OPEXenergy = (Ppenalty*1000*x["celc"] + Qpenalty*1000*x["celc"]*x["cheat"]) / (mcaptured/1000*3600 * x["FLH"])  # [EUR/t]
-    OPEX = OPEXfix + OPEXmakeup + OPEXenergy     
-
-    # Construct a reversed auction bid
-    CAC = OPEX + levelized_CAPEX + transport_cost                        # [EUR/t]
-
-    fossil = plant["Fossil"] / plant["Total"]                                 # [tfossil/t] share of fossil CO2
-    biogenic = 1 - fossil                                                     # [tbiogenic/t] share of biogenic CO2
-    incentives = fossil * x["ETS"] + biogenic * x["CRC"]                      # [EUR/t]
-    bid = CAC - incentives          
-
-    # Store detailed cost data
-    cost_details = {
-        'OPEXfix': OPEXfix,
-        'OPEXmakeup': OPEXmakeup,
-        'OPEXenergy': OPEXenergy,
-        'OPEX': OPEX,
-        'levelized_CAPEX': levelized_CAPEX,
-        'transport_cost': transport_cost,
-        'CAC': CAC,
-        'fossil_incentive': fossil * x['ETS'],
-        'biogenic_incentive': biogenic * x['CRC'],
-        'incentives': incentives,
-        'bid': bid
-    }
-
-    FCCS = mcaptured*10**-6*3600 * x["FLH"] * fossil                           # [ktCO2/yr]
-    BECCS = mcaptured*10**-6*3600 * x["FLH"] * biogenic                        # [ktCO2/yr]
-
-    return FCCS, BECCS, bid, Ppenalty*1000, Qpenalty*1000, cost_details # [MWh/yr]
-
-def plot_transport_costs(transport_costs, r2_scores, df, show_plot=False, max_distance=3000):
-    """
-    Plot transport costs with linear regression fits.
-    
-    Args:
-        transport_costs (dict): Dictionary of linear regression models
-        r2_scores (dict): Dictionary of R² scores for each model
-        df (pd.DataFrame): Original data
-        show_plot (bool): Whether to display the plot
-        max_distance (float): Maximum distance to show in the plot [km]
-    
-    Returns:
-        tuple: (fig, ax) matplotlib figure and axis objects
-    """
-    # Create distance range for x-axis
-    distances = np.linspace(0, max_distance, 100)
-    
-    # Create figure and axis
-    fig, ax = plt.subplots(figsize=(12, 6))
-    
-    # Plot each scenario
-    scenarios = ['1Mt', '2Mt', '3Mt']
-    colors = ['blue', 'green', 'red']
-    
-    for i, scenario in enumerate(scenarios):
-        # Plot data points
-        ax.scatter(df['distance'], df[f'optimist_{scenario}'], 
-                  color=colors[i], marker='o', alpha=0.3, label=f'{scenario} - Optimistic (data)')
-        ax.scatter(df['distance'], df[f'pessimist_{scenario}'], 
-                  color=colors[i], marker='s', alpha=0.3, label=f'{scenario} - Pessimistic (data)')
-        
-        # Plot regression lines
-        ax.plot(distances, transport_costs[f'optimist_{scenario}'].predict(distances.reshape(-1, 1)), 
-               color=colors[i], linestyle='-', 
-               label=f'{scenario} - Optimistic (R²={r2_scores[f"optimist_{scenario}"]:.3f})')
-        ax.plot(distances, transport_costs[f'pessimist_{scenario}'].predict(distances.reshape(-1, 1)), 
-               color=colors[i], linestyle='--', 
-               label=f'{scenario} - Pessimistic (R²={r2_scores[f"pessimist_{scenario}"]:.3f})')
-    
-    ax.set_xlabel('Distance [km]')
-    ax.set_ylabel('Transport Cost [EUR/t]')
-    ax.set_title(f'Transport Costs vs Distance for Different Scenarios\nwith Linear Regression Fits (extended to {max_distance} km)')
-    ax.grid(True, linestyle='--', alpha=0.7)
-    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-    
-    # Add a note about the regression line extension
-    fig.text(0.02, 0.02, 'Note: Regression lines extend beyond the data range and can be used for predictions at any distance', 
-             fontsize=8, style='italic')
-    
-    plt.tight_layout()
-    
-    if show_plot:
-        plt.show()
-    
-    return fig, ax
-
-def haversine_distance(lat1, lon1, lat2, lon2):
-    """
-    Calculate the great circle distance between two points on the earth (specified in decimal degrees)
-    
-    Args:
-        lat1, lon1: Latitude and longitude of first point
-        lat2, lon2: Latitude and longitude of second point
-    
-    Returns:
-        float: Distance in kilometers
-    """
-    # Convert decimal degrees to radians
-    lat1, lon1, lat2, lon2 = map(np.radians, [lat1, lon1, lat2, lon2])
-    
-    # Haversine formula
-    dlon = lon2 - lon1
-    dlat = lat2 - lat1
-    a = np.sin(dlat/2)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon/2)**2
-    c = 2 * np.arcsin(np.sqrt(a))
-    r = 6371  # Radius of earth in kilometers
-    
-    return c * r
-
-def assign_hub(plants_df):
-    """
-    Assign each plant to its nearest hub based on geographical coordinates.
-    
-    Args:
-        plants_df (pd.DataFrame): DataFrame containing plant information with 'Latitude' and 'Longitude' columns
-    
-    Returns:
-        pd.DataFrame: Updated plants DataFrame with new 'hub' column
-    """
-    # Read hubs data
-    hubs_df = pd.read_csv("data/hubs.csv")
-    
-    # Create a copy of the plants DataFrame to avoid modifying the original
-    plants = plants_df.copy()
-    
-    # Initialize hub column
-    plants['hub'] = None
-    plants['distance_to_hub'] = np.inf
-    
-    # For each plant, find the nearest hub
-    for idx, plant in plants.iterrows():
-        min_distance = np.inf
-        nearest_hub = None
-        
-        for _, hub in hubs_df.iterrows():
-            distance = haversine_distance(
-                plant['Latitude'], plant['Longitude'],
-                hub['lat'], hub['lon']
-            )
-            
-            if distance < min_distance:
-                min_distance = distance
-                nearest_hub = hub['hub']
-        
-        plants.at[idx, 'hub'] = nearest_hub
-        plants.at[idx, 'distance_to_hub'] = min_distance
-    
-    return plants
-
-def get_thermo_properties():
-    """
-    Creates lookup tables for thermodynamic properties of CO2 and H2.
-    
     Returns:
         dict: Dictionary containing:
             - 'CO2': Dictionary with temperature as key and properties as values
@@ -988,336 +54,252 @@ def get_thermo_properties():
     
     return thermo_props
 
-def get_property_at_temp(thermo_props, gas, T, property_name):
+def shipping_adjustment(df, scaling=0.67, debug=False):
     """
-    Get thermodynamic property at a specific temperature using interpolation.
+    Adjust shipping costs by adding 0.5Mt capacity data and extrapolating 
+    costs for 1st and 2nd shortest distances using linear regression.
     
     Args:
-        thermo_props: Dictionary of thermodynamic properties
-        gas: 'CO2' or 'H2'
-        T: Temperature in Kelvin
-        property_name: 'kappa', 'cp', or 'cv'
+        df: DataFrame with shipping cost data
+        debug: If True, print debug information
     
     Returns:
-        float: Interpolated property value
+        Adjusted DataFrame with extrapolated values
     """
-    # Ensure temperature is within bounds
-    T = np.clip(T, thermo_props[gas]['temperatures'][0], thermo_props[gas]['temperatures'][-1])
+    if debug:
+        print("Starting shipping adjustment...")
     
-    # Use numpy's interpolation
-    return np.interp(T, thermo_props[gas]['temperatures'], thermo_props[gas][property_name])
+    # Add shipping costs for 0.5Mt
+    capex_reference = df['optimist_1Mt']*1 # absolute costs for 1Mt
+    capex_optimist = capex_reference * (0.5/1)**scaling
+    df['optimist_0.5Mt'] = capex_optimist / 0.5 # specific costs for 0.5Mt
 
-def plot_awarded_metrics(output):
-    """
-    Create a bar plot of awarded metrics with two y-axes.
-    
-    Args:
-        output (dict): Dictionary containing the awarded metrics
-    """
-    # Create figure and axis with two y-axes
-    fig, ax1 = plt.subplots(figsize=(12, 6))
-    ax2 = ax1.twinx()
-    
-    # Data for plotting
-    metrics = ['FCCS', 'BECCS', 'FCCU', 'BCCU', 'Ppenalty', 'Qpenalty', 'Qmethanol']
-    values = [output['total_FCCS'], output['total_BECCS'], output['total_FCCU'], output['total_BCCU'], 
-              output['total_Ppenalty']/1000, output['total_Qpenalty']/1000, # To GWh
-              output['total_Qmethanol']/1000]
-    
-    # Colors for bars
-    colors = ['#1f77b4', '#2ca9b8', '#d62728', '#ff7f0e', '#9467bd']
-    
-    # Create bars - split between primary and secondary axes
-    primary_metrics = ['FCCS', 'BECCS', 'FCCU', 'BCCU']
-    secondary_metrics = ['Ppenalty', 'Qpenalty', 'Qmethanol']
-    
-    # Plot primary metrics on ax1
-    primary_values = [output['total_FCCS'], output['total_BECCS'], output['total_FCCU'], output['total_BCCU']]
-    primary_colors = ['#1f77b4', '#2ca9b8', '#d62728']
-    bars1 = ax1.bar(primary_metrics, primary_values, color=primary_colors, alpha=0.8)
-    
-    # Plot secondary metrics on ax2
-    secondary_values = [output['total_Ppenalty']/1000, output['total_Qpenalty']/1000, output['total_Qmethanol']/1000]
-    secondary_colors = ['#ff7f0e', '#9467bd', '#8c564b']
-    bars2 = ax2.bar(secondary_metrics, secondary_values, color=secondary_colors, alpha=0.8)
-    
-    # Set labels and title
-    ax1.set_xlabel('Metrics')
-    ax1.set_ylabel('CO2 [ktCO2/yr]', color='#1f77b4')
-    ax2.set_ylabel('Energy [GWh/yr]', color='#d62728')
-    
-    # Add value labels on top of bars
-    for bar in bars1:
-        height = bar.get_height()
-        ax1.text(bar.get_x() + bar.get_width()/2., height,
-                f'{height:.1f}',
-                ha='center', va='bottom')
-    for bar in bars2:
-        height = bar.get_height()
-        ax2.text(bar.get_x() + bar.get_width()/2., height,
-                f'{height:.1f}',
-                ha='center', va='bottom')
-    
-    # Add grid
-    ax1.grid(True, linestyle='--', alpha=0.3)
-    ax2.grid(True, linestyle='--', alpha=0.3)
-    
-    # Adjust layout
-    plt.tight_layout()
-    
-    return fig
+    capex_reference = df['pessimist_1Mt']*1 
+    capex_pessimist = capex_reference * (0.5/1)**scaling
+    df['pessimist_0.5Mt'] = capex_pessimist / 0.5 
 
-def plot_product_increases(products_df):
-    """
-    Create a bar plot of product price increases.
-    
-    Args:
-        products_df (pd.DataFrame): DataFrame containing product information
-    """
-    # Create figure and axis
-    fig, ax = plt.subplots(figsize=(10, 6))
-    
-    # Sort products by price increase percentage
-    sorted_df = products_df.sort_values('price_increase_percent', ascending=False)
-    
-    # Create bars
-    bars = ax.bar(sorted_df['name'], sorted_df['price_increase_percent'], 
-                 color='#2ca9b8')
-    
-    # Set labels and title
-    ax.set_xlabel('Products')
-    ax.set_ylabel('Price Increase [%]')
-    plt.title('Product Price Increases Due to Carbon Tax')
-    
-    # Rotate x-axis labels for better readability
-    plt.xticks(rotation=45, ha='right')
-    
-    # Add value labels on top of bars
-    for bar in bars:
-        height = bar.get_height()
-        ax.text(bar.get_x() + bar.get_width()/2., height,
-                f'{height:.1f}%',
-                ha='center', va='bottom')
-    
-    # Add grid
-    ax.grid(True, linestyle='--', alpha=0.3)
-    
-    # Adjust layout to prevent label cutoff
-    plt.tight_layout()
-    
-    # Save figure
-    plt.savefig('product_increases.png', dpi=600, bbox_inches='tight')
-    
-    return fig
+    column_order = ['distance', 'optimist_0.5Mt', 'pessimist_0.5Mt', 'optimist_1Mt', 'pessimist_1Mt', 
+                    'optimist_2Mt', 'pessimist_2Mt', 'optimist_3Mt', 'pessimist_3Mt']
+    shipping_df = df[column_order]
 
-def plot_plant_cost_breakdown(ccs_plants):
-    """
-    Create a cost breakdown plot for CCS plants showing individual cost components and incentives.
+    # Extrapolate costs for 1st and 2nd shortest distances using linear regression
+    # Sort by distance to get shortest distances first
+    shipping_sorted = shipping_df.sort_values('distance').reset_index(drop=True)
+
+    # Use 3rd-6th shortest distances (indices 2-5) to predict 1st-2nd (indices 0-1)
+    train_distances = shipping_sorted['distance'].iloc[2:6].values.reshape(-1, 1)
+    target_distances = shipping_sorted['distance'].iloc[0:2].values.reshape(-1, 1)
+
+    for mt in [0.5, 1, 2, 3]:
+        for scenario in ['optimist', 'pessimist']:
+            column = f"{scenario}_{mt}Mt"
+            # Train on 3rd-6th distances
+            train_costs = shipping_sorted[column].iloc[2:6].values
+            reg = LinearRegression()
+            reg.fit(train_distances, train_costs)
+            predicted_costs = reg.predict(target_distances)
+            
+            # Update the dataframe - hard code replaced!
+            shipping_sorted.loc[0, column] = predicted_costs[0]
+            shipping_sorted.loc[1, column] = predicted_costs[1]
+
+    shipping_df = shipping_sorted.sort_index()
+
+    if debug:
+        print("Debug - Extrapolated shipping costs:")
+        print(shipping_df[['distance', 'optimist_0.5Mt', 'pessimist_0.5Mt']].round(2))
     
-    Args:
-        ccs_plants (list): List of CCS plant dictionaries with cost_details
-    """
-    if not ccs_plants:
-        return None
-        
-    # Define the specific cost categories to plot (positive y-axis)
-    positive_categories = ['OPEXfix', 'OPEXmakeup', 'OPEXenergy', 'levelized_CAPEX', 'transport_cost']
-    
-    # Define incentive categories to plot (negative y-axis)
-    negative_categories = ['fossil_incentive', 'biogenic_incentive']
-    
-    # Create the plot
-    fig3, ax = plt.subplots(figsize=(15, 8))
-    
-    # Set up the x-axis positions
-    plant_names = [plant['name'] for plant in ccs_plants]
-    x = np.arange(len(plant_names))
-    width = 0.8  # Full width for each plant bar
-    
-    # Define colors for different cost categories (reds and yellows)
-    colors = ['#d73027', '#f46d43', '#fdae61', '#fee08b', '#ffffbf']  # Red to yellow gradient
-    
-    # Create stacked bars for positive costs (above x-axis)
-    bottom = np.zeros(len(plant_names))
-    for i, (category, color) in enumerate(zip(positive_categories, colors)):
-        values = [plant['cost_details'][category] for plant in ccs_plants]
-        ax.bar(x, values, width, label=category, color=color, bottom=bottom)
-        bottom += values
-    
-    # Create bars for incentives (below x-axis)
-    bottom = np.zeros(len(plant_names))  # Start at 0 for negative stacking
-    incentive_colors = ['#1a9850', '#66c2a5']  # Green to blue gradient
-    for i, (category, color) in enumerate(zip(negative_categories, incentive_colors)):
-        values = [-plant['cost_details'][category] for plant in ccs_plants]  # Make negative for display
-        ax.bar(x, values, width, label=category, color=color, bottom=bottom)
-        bottom += values  # This makes bottom more negative for next bar
-    
-    # Customize the plot with font size 12
-    ax.set_xlabel('Plants', fontsize=12)
-    ax.set_ylabel('Cost [EUR/tCO2]', fontsize=12)
-    ax.set_title('Cost Breakdown by Plant (CCS Plants Only)', fontsize=12)
-    ax.set_xticks(x + width/2)
-    ax.set_xticklabels(plant_names, rotation=45, ha='right', fontsize=12)
-    ax.tick_params(axis='y', labelsize=12)
-    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=12, reverse=True)
-    ax.grid(True, linestyle='--', alpha=0.3)
-    
-    # Add a horizontal line at y=0
-    ax.axhline(y=0, color='black', linestyle='-', alpha=0.5)
-    
-    # Add value labels for each cost component in the stacked bars
-    for i, plant in enumerate(ccs_plants):
-        if i != len(ccs_plants) - 1:
-            continue
-        # Add labels for positive costs (above x-axis)
-        bottom = 0
-        for j, category in enumerate(positive_categories):
-            value = plant['cost_details'][category]
-            if value > 0:  # Only add label if value is significant
-                ax.text(x[i] + width/2, bottom + value/2, 
-                       f'{int(round(value))}', ha='center', va='center', 
-                       color='black', fontsize=12, fontweight='bold')
-            bottom += value
-        
-        # Add labels for incentives (below x-axis)
-        bottom = 0
-        for j, category in enumerate(negative_categories):
-            value = -plant['cost_details'][category]  # Make negative for display
-            if abs(value) > 0:  # Only add label if value is significant
-                ax.text(x[i] + width/2, bottom + value/2, 
-                       f'{int(round(abs(plant["cost_details"][category])))}', ha='center', va='center', 
-                       color='black', fontsize=12, fontweight='bold')
-            bottom += value
-        
-        # Add total cost label on top of the positive bar
-        total_positive_cost = sum(plant['cost_details'][cat] for cat in positive_categories)
-        ax.text(x[i] + width/2, total_positive_cost, 
-               f'{total_positive_cost:.1f}', ha='center', va='bottom', 
-               color='black', fontsize=12, fontweight='bold')
-    
-    # Add bid values as black dots at their actual bid values on the y-axis
-    for i, plant in enumerate(ccs_plants):
-        # Plot the bid value as a black dot at the actual bid value, centered on the bar
-        ax.scatter(x[i], plant['bid'], 
-                  color='gray', s=100, zorder=5, marker='o')
-        
-        # Add bid value label next to the dot
-        ax.text(x[i] + 0.1, plant['bid'], 
-               f'{round(plant["bid"]):.1f}', ha='left', va='center', 
-               color='gray', fontsize=12, fontweight='bold')
-    
-    plt.tight_layout()
-    plt.savefig('plant_cost_breakdown.png', dpi=600, bbox_inches='tight')
-    
-    return fig3
+    return shipping_df
 
 def WACCUS_EPR( 
+    # constants
+    question="granulates",
+    CCUS="CCS", 
+    plants_df=None, 
+    shipping_df=None,
+    truck_df=None,          
+    compression_df=None,
+    thermo_props=None,    
+    SEK_to_EUR=0.091,
+
     # uncertainties
+    mKN39 = 884393,         # [t/a] plastic products mappable under KN39 [IVL] high uncertainty + combine with policy lever uncertainty
+    pKN39 = 46000,          # [SEK/tpl] [IVL]
+    mgranulates = 1258597,  # [t/a] granulates [IVL] low uncertainty
+    pgranulates = 13000,    # [SEK/tpl] [IVL]
+    mbag = 5*10**-6,        # [t/bag] check plastic_mapping calculation
+    pbag = 4,               # [SEK/bag]
+    cfraction = 0.85,       # [-] cfraction of carbon in plastic [Isabel]
+    circulated = 0.10,      # [-] fraction of granulates circulated, exempt from tax NOTE: no "market response" to tax
+
+    FLH = 8000,
+    capture_rate = 0.90,    # [-] 
+    Ccontent = 0.298,       # [kgC/kgf]
+    carbon_change = 0.10,   # [-] [-0.10,0.10] [Malder, 2023] fraction of biogenic carbon
+    LHVf = 11,              # [MJ/kgf] [Hammar]
+    LHVmethanol = 19.8,     # [MJ/kg] [Formelsamling]
+    makeup = 0.584/1000,    # [m3/tCO2] [Kumar, 2023]
+
+    q_reb = 3.5,            # [MJ/kgCO2]
+    p_capture = 0.1,        # [MWh/tCO2] [Beiron, 2022]
+    n_is = 0.80,            # [-]
+    n_electrolyzer = 0.699, # [MWH2/MWel] Table2.1 MSc Jacobsson & Palmgren (2025)
+    q_electrolyzer = 0.154, # [MWth/MWel] [AEL tech, Fig2.1 MSc Jacobsson & Palmgren, 2025] OR [Danish Renwable Fuels 100MW AEC]
+    q_synthesis = 0.087,    # [MWsteam/MWH2] about 0.08/(1-0.08)*QH2 [Danish Renewable Fuels Fig3, section 5.2 Methanol from Hydrogen and Carbon Dioxide]
+    n_synthesis = 0.78,     # [MWmethanol/MWH2+steam]
+    q_distill = 0.20,       # [MWth/MWH2+steam]
+    COP = 3,                # [MWth/MWel]
+    heat_optimism = 0.70,   # [0,1] assumed % of waste heat that can be recovered to DH
+
+    CAPEXref_cappture = 3550*0.09*1000, # [MNOK]->[kEUR] @400 ktCO2/yr [Gassnova, Demonstrasjon av Fullskala CO2-Håndtering - Rapport for Avsluttet Forprosjekt]
+    CAPEXref_H2 = 550,                  # [kEUR/MWe] [Danish Agency Excel Renewable Fuels AEC100MW]
+    CAPEXref_synthesis = 1.8749,        # [MEUR] [Danish Renewable Fuels PDF has a power function of CAPEX_synthesis. Fig4, p.186.] 
+    CAPEXref_rails = 63000000,          # [SEK*] @150 ktCO2/yr excluding railway track [Koldioxid på tåg, 2024]
+    CAPEXref_train = 86140000,          # [EUR*] an oversized train @15 wagons, cost = 4.98 *10**6 + 242*15 *10**3 [MSc Gunnarsson, 2025]
+    k = 0.67,                           # [-] [Stenström, 2025] assumed economy-of-scale factor
+    CEPCI = 900/600,                    # [-] [University of Manchester, 2025] applies to reference CAPEX values
+    
+    OPEXfix = 0.02,         # [-] % of base CAPEX, calculated from [Ramboll-Malmö, 2023]
+    dr = 0.075,             # [-]
+    t = 25,                 # [yr]
+    camine = 44,            # [SEK/tCO2] [Ramboll-Malmö, 2023]
+    celc = 60,              # [EUR/MWh]
+    cheat = 0.75,           # [% of elc]
+    CRC = 100,              # [EUR/tCO2]
+    ETS = 80,               # [EUR/tCO2]
+    pmethanol = 625,        # [EUR/t] [MSc Omar & Widgren, 2025]
+
+    stockholm = 1,          # [Mt/yr] [1,2,3] 
+    malmo = 0.5,            # [Mt/yr] [0.5,1,2] 
+    gothenburg = 0.5,       # [Mt/yr] [0.5,1,2] 
+    storage = "oygarden",   # ["oygarden", "kalundborg"]
 
     # levers
-    
-    # constants = assume producers do not react to the tax, no recycling rates
+    tax = 100,          # [EUR/tCO2] [50, 400] NOTE: explore discrete ranges => easier to visualize later
+    recyclable = 0.15,  # [-] fraction of products possible to recycle mechanically (exempt from tax), determined by policy criteria
 ):
+    # Store uncertainties (converted to EUR)
     x = {
         "mKN39": mKN39,
+        "pKN39": pKN39 * SEK_to_EUR,                # [EUR/tpl]
+        "mgranulates": mgranulates,
+        "pgranulates": pgranulates * SEK_to_EUR,    # [EUR/tpl]
+        "mbag": mbag,
+        "pbag": pbag * SEK_to_EUR,                  # [EUR/bag]
+        "cfraction": cfraction,
+        "circulated": circulated,
+
+        "FLH": FLH,
+        "capture_rate": capture_rate,
+        "Ccontent": Ccontent,
+        "carbon_change": carbon_change,
+        "LHVf": LHVf,
+        "LHVmethanol": LHVmethanol,
+        "makeup": makeup,
+
+        "q_reb": q_reb,
+        "p_capture": p_capture,
+        "n_is": n_is,
+        "n_electrolyzer": n_electrolyzer,
+        "q_electrolyzer": q_electrolyzer,
+        "q_synthesis": q_synthesis,
+        "n_synthesis": n_synthesis,
+        "q_distill": q_distill,
+        "COP": COP,
+        "heat_optimism": heat_optimism,
+
+        "CAPEXref_cappture": CAPEXref_cappture,
+        "CAPEXref_H2": CAPEXref_H2,
+        "CAPEXref_synthesis": CAPEXref_synthesis,
+        "CAPEXref_rails": CAPEXref_rails * SEK_to_EUR, # [EUR @150ktCO2/yr]
+        "CAPEXref_train": CAPEXref_train, 
+        "k": k,
+        "CEPCI": CEPCI,
+
+        "OPEXfix": OPEXfix,
+        "dr": dr,
+        "t": t,
+        "camine": camine * SEK_to_EUR, # [EUR/tCO2]
+        "celc": celc,
+        "cheat": cheat,
+        "CRC": CRC,
+        "ETS": ETS,
+        "pmethanol": pmethanol,
+
+        "stockholm": stockholm,
+        "malmo": malmo,
+        "gothenburg": gothenburg,
+        "storage": storage,
     }
 
+
+    if question == "granulates":
+        mass_taxed = mgranulates * (1 - circulated) * cfraction # [tC/yr]
+        granulates_inc = tax * (cfraction*3.66) / (pgranulates*SEK_to_EUR) # [-]
+        products_inc = tax * (cfraction*3.66) / (pKN39*SEK_to_EUR) 
+        bag_inc = tax * (cfraction*3.66 * mbag) / (pbag*SEK_to_EUR) 
+    elif question == "products":
+        mass_taxed = mKN39 * (1 - recyclable) * cfraction # [tC/yr]
+        granulates_inc = 0 # [-]
+        products_inc = tax * (cfraction*3.66) / (pKN39*SEK_to_EUR) 
+        bag_inc = tax * (cfraction*3.66 * mbag) / (pbag*SEK_to_EUR)
+    elif question == "both":
+        mass_taxed = mgranulates * (1 - circulated) * cfraction + mKN39 * (1 - recyclable) * cfraction # [tC/yr]
+        granulates_inc = tax * (cfraction*3.66) / (pgranulates*SEK_to_EUR) # EUR/tCO2 * (tC/tpl*tCO2/tC) / (EUR/tpl) = EUR/tCO2 * (tCO2/tpl) / (EUR/tpl)
+        products_inc = 2 * tax * (cfraction*3.66) / (pKN39*SEK_to_EUR) # [-] Motivate why this is not double taxation!
+        bag_inc = 2 * tax * (cfraction*3.66 * mbag) / (pbag*SEK_to_EUR) # EUR/tCO2 * (tCO2/bag) / (EUR/bag)
+    mass_CO2 = mass_taxed * 3.66        # [tCO2/yr]
+    mass_taxed = mass_taxed / cfraction # [tpl/yr]
+    fund = mass_CO2 * tax * 10**-6      # [MEUR/yr]
+
     output = {
-        'granulates_inc': granulates_inc,
-        'products_inc': products_inc,
-        'bag_inc': bag_inc,
-        'total_FCCS': total_FCCS,
-        'total_BECCS': total_BECCS,
-        'total_FCCU': total_FCCU,
-        'total_BCCU': total_BCCU,
-        'total_Ppenalty': total_Ppenalty,
-        'total_Qpenalty': total_Qpenalty,
-        'total_Qmethanol': total_Qmethanol,
-        'remaining_fund': remaining_fund,
-        'bid_data': bids,
+        # mass_taxed_granulates :
+        # mass_taxed_products :
+
+        # 'granulates_inc': granulates_inc,
+        # 'products_inc': products_inc,
+        # 'bag_inc': bag_inc,
+        # 'total_FCCS': total_FCCS,
+        # 'total_BECCS': total_BECCS,
+        # 'total_FCCU': total_FCCU,
+        # 'total_BCCU': total_BCCU,
+        # 'total_Ppenalty': total_Ppenalty,
+        # 'total_Qpenalty': total_Qpenalty,
+        # 'total_Qmethanol': total_Qmethanol,
+        # 'remaining_fund': remaining_fund,
+        # 'bid_data': bids,
     }
     return output
 
 if __name__ == "__main__":
-    # finding k exponent of CAPEX=CAPEX_ref⋅(mCO2/mCO2_ref)^k by linear regression: y = k * x
-    df = pd.read_csv("data/capture_costs.csv")
-    captured_ref = df["captured"].mean()
-    CAPEX_ref = df["CAPEX"].mean()
 
-    x = np.log(df["captured"] / captured_ref)
-    y = np.log(df["CAPEX"] / CAPEX_ref)
-    model = LinearRegression().fit(x.values.reshape(-1, 1), y.values)
-    k = model.coef_[0]
+    # Read data
+    plants_df = pd.read_csv('data/plants.csv')
+    plant_distances = pd.read_csv('data/plant_distances.csv')
+    shipping_df = pd.read_csv('data/shipping_costs.csv')
+    truck_df = pd.read_csv('data/truck_costs.csv')
+    compression_df = pd.read_csv('data/compression_costs.csv')
+    thermo_props = get_CoolProp()
+
+    # Adjust dataframes: add plant distances, add 0.5Mt shipping costs, convert SEK to EUR
+    SEK_to_EUR = 0.091
+    plants_df = plants_df.merge(plant_distances, on='Name', how='left')
+    shipping_df = shipping_adjustment(shipping_df, scaling=0.67, debug=False)
     
-    # Get sea transport cost functions and sea distances
-    SEK_TO_EUR = 0.091  # [EUR/SEK] Exchange rate
-    transport_costs, r2_scores, df = cost_transport()
-    sea_distances = precalculate_sea_distances()
-    thermo_props = get_thermo_properties()  # Get thermodynamic properties
-    # fig, ax = plot_transport_costs(transport_costs, r2_scores, df, show_plot=False)
-    
-    # reading plant data and assign these to transport hubs
-    plants = pd.read_csv("data/plants.csv")
-    plants = assign_hub(plants)
-    # print("\nWhat plants are assigned to which hub?")
-    # print(plants[['Name', 'hub', 'distance_to_hub']].to_string())
-    
+    cost_columns = [col for col in shipping_df.columns if col != 'distance']
+    shipping_df[cost_columns] = shipping_df[cost_columns] * SEK_to_EUR
+    truck_df["EUR/ton"] = truck_df["SEK/ton"] * SEK_to_EUR
+    truck_df = truck_df.drop(columns=["SEK/ton"])
+
     # Run the model
     output = WACCUS_EPR(
         question="granulates",
-        case="CCU", 
-        plants=plants, 
-        k=k,                          # For CAPEX=CAPEX_ref⋅(mCO2/mCO2_ref)^k
-        transport_costs=transport_costs,
-        sea_distances=sea_distances,  # Pass pre-calculated distances dict
-        thermo_props=thermo_props,     # Pass thermodynamic properties
-        SEK_TO_EUR=SEK_TO_EUR,
+        CCUS="CCS", 
+        plants_df=plants_df, 
+        shipping_df=shipping_df,
+        truck_df=truck_df,
+        compression_df=compression_df,
+        thermo_props=thermo_props,    
+        SEK_to_EUR=SEK_to_EUR,
     )
     
-    print("For CCU, mainly capture plants and H2 CAPEX/OPEX matters: other costs are miniscule")
-    # Create and save the plots
-    fig1 = plot_awarded_metrics(output)
-
-    # Plot cost breakdown for each plant
-    bid_data = output['bid_data']
-    
-    # Filter for CCS plants that have cost_details
-    ccs_plants = [bid for bid in bid_data if bid['type'] == 'CCS' and 'cost_details' in bid]
-    positive_categories = ['OPEXfix', 'OPEXmakeup', 'OPEXenergy', 'levelized_CAPEX', 'transport_cost']    
-    negative_categories = ['fossil_incentive', 'biogenic_incentive']
-    fig3 = plot_plant_cost_breakdown(ccs_plants)
-
-    # Plot price increases
-    plt.figure(figsize=(10, 6))
-    categories = ['Granulates', 'Products', 'Bags']
-    values = [output['granulates_inc'], output['products_inc'], output['bag_inc']]
-    
-    bars = plt.bar(categories, values, color=['skyblue', 'lightcoral', 'lightgreen'], alpha=0.7)
-    
-    # Add value labels on top of bars
-    for bar, value in zip(bars, values):
-        height = bar.get_height()
-        plt.text(bar.get_x() + bar.get_width()/2., height + 0.001,
-                f'{value:.3f}', ha='center', va='bottom', fontweight='bold')
-    
-    plt.ylabel('Price Increase [-]', fontsize=12)
-    plt.title('Plastic Price Increases Due to Carbon Tax', fontsize=14, fontweight='bold')
-    plt.grid(True, alpha=0.3, axis='y')
-    plt.tight_layout()
-    plt.savefig('price_increases.png', dpi=600, bbox_inches='tight')
-
-    # print("--- Feedback from Johanna/Judit ---")
-    # print("The KPIs are ish similar to those in Johanna's study. However, I am to optimistic about recovering waste heat.")
-    # print("Compressors: These cannot increase to the Tsynthesis, they should be reduced to 40C ish in every stage")
-    # print("-> However, I might neglect that issue. Otherwise, I must add a heater to re-heat the CO2 and H2 entering the synthesis")
-    # print("The largest heat recovery units are: from the amine capture plant (reboiler), ALK electrolyzer, and the methanol synthesis.")
-    # print("-> These deserve greater attention - mainly, I must verify that the heat temperatures are ok for DH applications")
-    # print("-> Check how much heat the synthesis produces, it should be transferred to the destillation first, and THEN MAYBE some of this remaining heat is available for either the qreboiler (exciting option!) or for DH (but check temperatures)")
-    # print("-> It is far from certain that you can recover this much heat from the destillation - its not necesarily true that 80percent of the energy in raw methanol becomes methanol and that 20percent to DH.")
-    # print("----> Check with Johanna for sources on that, possibly? Also, we need a pure destillation (cannot do without) since we use it for plastic/chemicals")
-    # print("-> It's uncertain how much heat can be recovered from electrolyzers - ask Tharun! He has the percentage and termperatures ... or maybe the MSc thesis")
-    # print("Finally, double check the conversion from H2 to methanol in synthesis - can I do it as an energy conversion, 100prc H2 to 100prc methanol? Do it via reaciton formula and LHV values as well! Check!")
-    # print("-> This is suspicious because one H2 should be lost (mass-wise) for each methanol molecule produced: CO2+3H2=>CH3OH+H2O")
-    # print(" .... She thinks I MUST DO EXERGY ANALYSIS... since heat is different... well, I don't think so, since I only need MONEY analysis!")
-    plt.show()
-

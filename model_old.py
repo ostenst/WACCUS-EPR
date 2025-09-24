@@ -1264,7 +1264,7 @@ def WACCUS_EPR(
     transport_optimism = False,   # [True, False]
 
     # levers 
-    tax = 110,          # [EUR/tCO2] [50, 100, 150, 200, 250, 300, 350] NOTE: explore discrete ranges => easier to visualize later
+    tax = 110,          # [EUR/tCO2] [50, 100, 150, 200, 250, 300] NOTE: explore discrete ranges => easier to visualize later
     recyclable = 0.15,  # [-] fraction of products possible to recycle mechanically (exempt from tax), determined by policy criteria
 
     # constants
