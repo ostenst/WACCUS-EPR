@@ -200,7 +200,8 @@ def ship_cost(annual_CO2, city, ship_distance, shipping_df, x, optimism="optimis
     return shipping_cost
 
 def plan_CCS(plant, c, x, l):
-    # burn fuel and capture/condition CO2
+
+    # Burn fuel and capture/condition CO2
     mfuel = plant["Qwaste"] / (x["LHVf"]/3600) /3600    # [kgf/s]
     mCO2 = mfuel* x["Ccontent"] * 44/12                 # [kgCO2/s]
     mcaptured = mCO2 * x["capture_rate"]                # [kgCO2/s]
@@ -208,7 +209,7 @@ def plan_CCS(plant, c, x, l):
     Pcapture = x["p_capture"] * mcaptured/1000*3600     # [MW] 
     Pcondition = x["p_condition"] * mcaptured           # [MW]  
 
-    # penalize CHP and recover heat up to 100 % of original DH - use whatever power is available for HP
+    # Penalize CHP and recover heat up to 100 % of original DH - use whatever power is available for HP
     P = plant["P"] * (1 - Qreb/plant["Qwaste"])         # assuming live steam is used for reboiler
     P = P - Pcapture - Pcondition
     Qdh = plant["Qdh"] * (1 - Qreb/plant["Qwaste"])
@@ -218,98 +219,84 @@ def plan_CCS(plant, c, x, l):
     if Qdiff < 0:
         raise ValueError
     else:
-        Whp = Qdiff / x["COP"]
-        if Whp > P: 
+        Whp = Qdiff / x["COP"]  
+        if Whp > P and P > 0:   
             Whp = P
+        elif P < 0:             
+            Whp = 0             
     Qdh = Qdh + Qhex + Whp*x["COP"]
     P -= Whp
     Ppenalty = (plant["P"] - P) * x["FLH"]        # [MWh/yr]
     Qpenalty = (plant["Qdh"] - Qdh) * x["FLH"]    # [MWh/yr]
 
     # Estimate CAPEX and on-site OPEX
-    annual_CO2 = mcaptured/1000*3600 * x["FLH"]  # [tCO2/yr]
+    annual_CO2 = mcaptured/1000*3600 * x["FLH"]   # [tCO2/yr]
     CAPEX_capture = x["CAPEXref_capture"] * (annual_CO2/(400*10**3)) ** x["k"] * x["CEPCI"] # [kEUR]
     CAPEXlev_capture = levelize_kEUR(CAPEX_capture, annual_CO2, x)                  # [EUR/tCO2]
+    CAPEX_HP = x["CAPEXref_HP"] * Whp*x["COP"] *1000 * x["CEPCI"]                   # [kEUR] neglect HEX costs
+    CAPEXlev_HP = levelize_kEUR(CAPEX_HP, annual_CO2, x)                            # [EUR/tCO2]
 
     OPEXfix = (CAPEX_capture*1000 * x["OPEXfix"]) / annual_CO2                      # [EUR/tCO2] 
     OPEXmakeup = x["camine"]                                                        # [EUR/tCO2]
     OPEXenergy = (Ppenalty*x["celc"] + Qpenalty*x["celc"]*x["cheat"]) / annual_CO2  # [EUR/tCO2]
     OPEX = OPEXfix + OPEXmakeup + OPEXenergy   
 
-    # Calculate transport costs
+    # Calculate transport and storage costs
+    costs_transport = []
     if plant['Truck_distance'] is not None and not pd.isna(plant['Truck_distance']):
-        cost_loading = loading_cost(annual_CO2, x)                                  # [EUR/tCO2]
-        cost_truck = truck_cost(annual_CO2, plant['Truck_distance'], c["truck_df"], x) # [EUR/tCO2]
+        cost_loading = loading_cost(annual_CO2, x)                                      # [EUR/tCO2]
+        cost_truck = truck_cost(annual_CO2, plant['Truck_distance'], c["truck_df"], x)  # [EUR/tCO2]
+        costs_transport.append(cost_loading)
+        costs_transport.append(cost_truck)
 
     if plant['Pipeline_distance'] is not None and not pd.isna(plant['Pipeline_distance']):
-        cost_pipeline = pipeline_cost(annual_CO2, plant['Pipeline_distance'], x)    # [EUR/tCO2]
+        cost_pipeline = pipeline_cost(annual_CO2, plant['Pipeline_distance'], x)        # [EUR/tCO2]
+        costs_transport.append(cost_pipeline)
 
     if plant['Rail_distance'] is not None and not pd.isna(plant['Rail_distance']):
-        cost_loading = loading_cost(annual_CO2, x)                                  # [EUR/tCO2]
-        cost_rail = train_cost(annual_CO2, plant['Rail_distance'], x)                # [EUR/tCO2]
+        cost_loading = loading_cost(annual_CO2, x)                                      # [EUR/tCO2]
+        cost_rail = train_cost(annual_CO2, plant['Rail_distance'], x)                   # [EUR/tCO2]
+        costs_transport.append(cost_loading)
+        costs_transport.append(cost_rail)
 
     if plant['Oygarden_distance'] is not None and not pd.isna(plant['Oygarden_distance']):
         if x["storage"] == "oygarden":
             distance = plant['Oygarden_distance']
         if x["storage"] == "kalundborg":
             distance = plant['Kalundborg_distance']
-        cost_ship = ship_cost(annual_CO2, plant["City"], distance, c["shipping_df"], x)  # [EUR/tCO2]
+        cost_ship = ship_cost(annual_CO2, plant["City"], distance, c["shipping_df"], x) # [EUR/tCO2]
+        costs_transport.append(cost_ship)
 
-    print("\nPlant:", plant["Name"])
-    if 'cost_loading' in locals():
-        print("Cost loading:", cost_loading)
-    if 'cost_truck' in locals():
-        print("Cost truck:", cost_truck)
-    if 'cost_pipeline' in locals():
-        print("Cost pipeline:", cost_pipeline)
-    if 'cost_rail' in locals():
-        print("Cost rail:", cost_rail)
-    if 'cost_ship' in locals():
-        print("Cost ship:", cost_ship)
-    
-    total_cost = 0
-    if 'cost_loading' in locals():
-        total_cost += cost_loading
-    if 'cost_truck' in locals():
-        total_cost += cost_truck
-    if 'cost_pipeline' in locals():
-        total_cost += cost_pipeline
-    if 'cost_rail' in locals():
-        total_cost += cost_rail
-    if 'cost_ship' in locals():
-        total_cost += cost_ship
-    print("Summed transport cost:", total_cost)
+    transport_cost = sum(costs_transport)
 
-    print("\n YEEES TRANSPORT DONE! CONTINUE WITH BIDS :) ")
-    print("Note: we disregard criticism to add interim storage/tankers for trucks and trains! These are within the +-15percent uncertainty!")
+    # Construct a reversed auction bid
+    CAC = CAPEXlev_capture + CAPEXlev_HP + OPEX + transport_cost    # [EUR/tCO2]
 
-    # # Construct a reversed auction bid
-    # CAC = OPEX + levelized_CAPEX + transport_cost                        # [EUR/t]
+    fossil = plant["Fossil"] / plant["Total"]                       # [tfossil/t] 
+    biogenic = 1 - fossil                                           # [tbiogenic/t] 
+    fossil -= x["carbon_change"]
+    biogenic += x["carbon_change"]
+    incentives = fossil * x["ETS"] + biogenic * x["CRC"]            # [EUR/tCO2]
 
-    # fossil = plant["Fossil"] / plant["Total"]                                 # [tfossil/t] share of fossil CO2
-    # biogenic = 1 - fossil                                                     # [tbiogenic/t] share of biogenic CO2
-    # incentives = fossil * x["ETS"] + biogenic * x["CRC"]                      # [EUR/t]
-    # bid = CAC - incentives          
+    bid = CAC - incentives          
 
-    # # Store detailed cost data
-    # cost_details = {
-    #     'OPEXfix': OPEXfix,
-    #     'OPEXmakeup': OPEXmakeup,
-    #     'OPEXenergy': OPEXenergy,
-    #     'OPEX': OPEX,
-    #     'levelized_CAPEX': levelized_CAPEX,
-    #     'transport_cost': transport_cost,
-    #     'CAC': CAC,
-    #     'fossil_incentive': fossil * x['ETS'],
-    #     'biogenic_incentive': biogenic * x['CRC'],
-    #     'incentives': incentives,
-    #     'bid': bid
-    # }
+    FCCS = annual_CO2 * fossil /1000                                # [ktCO2/yr]
+    BECCS = annual_CO2 * biogenic /1000                             # [ktCO2/yr]
 
-    # FCCS = mcaptured*10**-6*3600 * x["FLH"] * fossil                           # [ktCO2/yr]
-    # BECCS = mcaptured*10**-6*3600 * x["FLH"] * biogenic                        # [ktCO2/yr]
+    cost_details = {
+        'OPEXfix': OPEXfix,
+        'OPEXmakeup': OPEXmakeup,
+        'OPEXenergy': OPEXenergy,
+        'OPEX': OPEX,
+        'CAPEXlev': CAPEXlev_capture + CAPEXlev_HP,
+        'transport_cost': transport_cost,
+        'CAC': CAC,
+        'fossil_incentive': fossil * x['ETS'],
+        'biogenic_incentive': biogenic * x['CRC'],
+        'incentives': incentives,
+        'bid': bid
+    }
 
-    bid, FCCS, BECCS, Ppenalty, Qpenalty, cost_details = [1,2,3,4,5,6]
     return bid, FCCS, BECCS, Ppenalty, Qpenalty, cost_details # [MWh/yr]
 
 def WACCUS_EPR( 
@@ -322,6 +309,7 @@ def WACCUS_EPR(
     compression_df=None,
     thermo_props=None,    
     SEK_to_EUR=0.091,
+    print_auction=False,
 
     # uncertainties
     mKN39 = 884393,         # [t/a] plastic products mappable under KN39 [IVL] high uncertainty + combine with policy lever uncertainty
@@ -354,6 +342,7 @@ def WACCUS_EPR(
     heat_optimism = 0.70,   # [0,1] assumed % of waste heat that can be recovered to DH
 
     CAPEXref_capture = 3550*0.09*1000,  # [MNOK]->[kEUR] @400 ktCO2/yr [Gassnova, Demonstrasjon av Fullskala CO2-Håndtering - Rapport for Avsluttet Forprosjekt]
+    CAPEXref_HP = 0.86,                 # [MEUR/MWth] [Bergander & Hellander, 2025]
     CAPEXref_H2 = 550,                  # [kEUR/MWe] [Danish Agency Excel Renewable Fuels AEC100MW]
     CAPEXref_synthesis = 1.8749,        # [MEUR] [Danish Renewable Fuels PDF has a power function of CAPEX_synthesis. Fig4, p.186.] 
     CAPEXref_loading = 63000000,        # [SEK*] @150 ktCO2/yr excluding railway track [Koldioxid på tåg, 2024]
@@ -421,6 +410,7 @@ def WACCUS_EPR(
         "heat_optimism": heat_optimism,
 
         "CAPEXref_capture": CAPEXref_capture,
+        "CAPEXref_HP": CAPEXref_HP,
         "CAPEXref_H2": CAPEXref_H2,
         "CAPEXref_synthesis": CAPEXref_synthesis,
         "CAPEXref_loading": CAPEXref_loading * SEK_to_EUR, # [EUR @150ktCO2/yr]
@@ -500,24 +490,97 @@ def WACCUS_EPR(
         #         'Qmethanol': Qmethanol
         #     })
     bids.sort(key=lambda x: x['bid'])
+    if print_auction:
+        print("\nBids (sorted):")
+        print(f"{'Name':<25} {'Bid (EUR/tCO2)':>15} {'CAC (EUR/tCO2)':>18}")
+        print("-" * 60)
+        for bid in bids:
+            print(f"{bid['name']:<25} {bid['bid']:>15.2f} {bid['cost_details']['CAC']:>18.2f}")
 
+    # Run reverse auction
+    remaining_fund = fund
+    awarded_plants = []
+    
+    for bid in bids:
+        if bid['type'] == 'CCS':
+            requested_amount = bid['bid'] * (bid['FCCS'] + bid['BECCS'])*1000 /(10**6) # [EUR/tCO2 * ktCO2/yr => MEUR/yr]
+            awarded = requested_amount <= remaining_fund # [MEUR/yr]
+            if awarded:
+                remaining_fund -= requested_amount
+            awarded_plants.append({
+                'name': bid['name'],
+                'type': bid['type'],
+                'awarded': awarded,
+                'bid': bid['bid'],
+                'FCCS': bid['FCCS'],
+                'BECCS': bid['BECCS'],
+                'CCStot': bid['FCCS'] + bid['BECCS'],
+                'Ppenalty': bid['Ppenalty'],
+                'Qpenalty': bid['Qpenalty'],
+                'FCCU': 0,
+                'BCCU': 0,
+                'CCUtot': 0,
+                'Qmethanol': 0,
+                'amount': requested_amount if awarded else 0,
+                'cost_details': bid.get('cost_details', {})
+            })
+        # else:  # CCU
+        #     requested_amount = bid['bid'] * (bid['FCCU'] + bid['BCCU'])*1000 /(10**6)
+        #     awarded = requested_amount <= remaining_fund
+        #     if awarded:
+        #         remaining_fund -= requested_amount
+        #     awarded_plants.append({
+        #         'name': bid['name'],
+        #         'type': bid['type'],
+        #         'awarded': awarded,
+        #         'bid': bid['bid'],
+        #         'FCCS': 0,
+        #         'BECCS': 0,
+        #         'CCStot': 0,
+        #         'Ppenalty': bid['Ppenalty'],
+        #         'Qpenalty': bid['Qpenalty'],
+        #         'FCCU': bid['FCCU'],
+        #         'BCCU': bid['BCCU'],
+        #         'CCUtot': bid['FCCU'] + bid['BCCU'],
+        #         'Qmethanol': bid['Qmethanol'],
+        #         'amount': requested_amount if awarded else 0
+        #     })
+
+    if print_auction:
+        print("\nSummary of auction:")
+        print(f"Total fund: {fund:.2f} MEUR/yr")
+        print(f"Remaining fund: {remaining_fund:.2f} MEUR/yr")
+        print(f"Number of plants awarded: {len([p for p in awarded_plants if p['awarded']])}")
+        print("\nAwarded plants:")
+        print(f"{'Plant Name':<20} {'Type':<6} {'Awarded':<6} {'[EUR/t]':>10} {'[MEUR/yr]':>10} {'FCCS':>10} {'BECCS':>10} {'CCStot':>12} {'FCCU':>10} {'BCCU':>10} {'CCUtot':>12} {'Ppenalty':>12} {'Qpenalty':>12} {'Qmethanol':>12}")
+        print("-" * 160)
+        for plant in awarded_plants:
+            print(f"{plant['name']:<20} {plant['type']:<6} {str(plant['awarded']):<6} {plant['bid']:>10.2f} {plant['amount']:>10.2f} {plant['FCCS']:>10.2f} {plant['BECCS']:>10.2f} {plant['CCStot']:>12.2f} {plant['FCCU']:>10.2f} {plant['BCCU']:>10.2f} {plant['CCUtot']:>12.2f} {plant['Ppenalty']:>12.2f} {plant['Qpenalty']:>12.2f} {plant['Qmethanol']:>12.2f}")
+
+    # Calculate sums of awarded metrics
+    total_FCCS = sum(plant['FCCS'] for plant in awarded_plants if plant['awarded'])
+    total_BECCS = sum(plant['BECCS'] for plant in awarded_plants if plant['awarded'])
+    total_FCCU = sum(plant['FCCU'] for plant in awarded_plants if plant['awarded'])
+    total_BCCU = sum(plant['BCCU'] for plant in awarded_plants if plant['awarded'])
+    total_Ppenalty = sum(plant['Ppenalty'] for plant in awarded_plants if plant['awarded'])
+    total_Qpenalty = sum(plant['Qpenalty'] for plant in awarded_plants if plant['awarded'])
+    total_Qmethanol = sum(plant['Qmethanol'] for plant in awarded_plants if plant['awarded'])
 
     output = {
-        # mass_taxed_granulates :
-        # mass_taxed_products :
+        'mass_taxed': mass_taxed,           # [tpl/yr]
+        'fund': fund,                       # [MEUR/yr]
+        'remaining_fund': remaining_fund,   # [MEUR/yr]
+        'granulates_inc': granulates_inc,   # [-]
+        'products_inc': products_inc,       # [-]
+        'bag_inc': bag_inc,                 # [-]
 
-        # 'granulates_inc': granulates_inc,
-        # 'products_inc': products_inc,
-        # 'bag_inc': bag_inc,
-        # 'total_FCCS': total_FCCS,
-        # 'total_BECCS': total_BECCS,
-        # 'total_FCCU': total_FCCU,
-        # 'total_BCCU': total_BCCU,
-        # 'total_Ppenalty': total_Ppenalty,
-        # 'total_Qpenalty': total_Qpenalty,
-        # 'total_Qmethanol': total_Qmethanol,
-        # 'remaining_fund': remaining_fund,
-        # 'bid_data': bids,
+        'total_FCCS': total_FCCS,           # [ktCO2/yr]
+        'total_BECCS': total_BECCS,         # [ktCO2/yr]
+        'total_FCCU': total_FCCU,           # [ktCO2/yr]
+        'total_BCCU': total_BCCU,           # [ktCO2/yr]
+        'total_Ppenalty': total_Ppenalty,   # [MWh/yr]
+        'total_Qpenalty': total_Qpenalty,   # [MWh/yr]
+        'total_Qmethanol': total_Qmethanol, # [MWh/yr]
     }
     return output
 
@@ -551,5 +614,22 @@ if __name__ == "__main__":
         compression_df=compression_df,
         thermo_props=thermo_props,    
         SEK_to_EUR=SEK_to_EUR,
+        print_auction=False,
     )
+
+    print("\n----------------------------------------These are the simulation results:----------------------------------------")
+    print("For reference, Exergi received 20 BSEK over 15 years => 1.33 BSEK/yr => 120 MEUR/yr, or 150 EUR/tCO2")
+    print("Mass taxed:", output["mass_taxed"], " [tpl/yr]")
+    print("Fund:", output["fund"], " [MEUR/yr]")
+    print("Remaining fund:", output["remaining_fund"], " [MEUR/yr]")
+    print("\nGranulates inc:", output["granulates_inc"], " [-]")
+    print("Products inc:", output["products_inc"], " [-]")
+    print("Bag inc:", output["bag_inc"], " [-]")
+    print("\nTotal FCCS:", output["total_FCCS"], " [ktCO2/yr]")
+    print("Total BECCS:", output["total_BECCS"], " [ktCO2/yr]")
+    print("Total FCCU:", output["total_FCCU"], " [ktCO2/yr]")
+    print("Total BCCU:", output["total_BCCU"], " [ktCO2/yr]")
+    print("\nTotal Ppenalty:", output["total_Ppenalty"]/1000, " [GWh/yr]")
+    print("Total Qpenalty:", output["total_Qpenalty"]/1000, " [GWh/yr]")
+    print("Total Qmethanol:", output["total_Qmethanol"]/1000, " [GWh/yr]")
     
