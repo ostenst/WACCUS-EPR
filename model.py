@@ -327,7 +327,6 @@ def WACCUS_EPR(
     carbon_change = 0.10,   # [-] [-0.10,0.10] [Malder, 2023] fraction of biogenic carbon
     LHVf = 11,              # [MJ/kgf] [Hammar]
     LHVmethanol = 19.8,     # [MJ/kg] [Formelsamling]
-    makeup = 0.584/1000,    # [m3/tCO2] [Kumar, 2023]
 
     q_reb = 3.5,            # [MJ/kgCO2]
     p_capture = 0.1,        # [MWh/tCO2] [Beiron, 2022]
@@ -395,7 +394,6 @@ def WACCUS_EPR(
         "carbon_change": carbon_change,
         "LHVf": LHVf,
         "LHVmethanol": LHVmethanol,
-        "makeup": makeup,
 
         "q_reb": q_reb,
         "p_capture": p_capture,
@@ -565,22 +563,31 @@ def WACCUS_EPR(
     total_Ppenalty = sum(plant['Ppenalty'] for plant in awarded_plants if plant['awarded'])
     total_Qpenalty = sum(plant['Qpenalty'] for plant in awarded_plants if plant['awarded'])
     total_Qmethanol = sum(plant['Qmethanol'] for plant in awarded_plants if plant['awarded'])
+    potential_CCS = sum(plant['FCCS'] + plant['BECCS'] for plant in awarded_plants)
+    potential_CCU = sum(plant['FCCU'] + plant['BCCU'] for plant in awarded_plants)
 
     output = {
         'mass_taxed': mass_taxed,           # [tpl/yr]
         'fund': fund,                       # [MEUR/yr]
         'remaining_fund': remaining_fund,   # [MEUR/yr]
+
         'granulates_inc': granulates_inc,   # [-]
         'products_inc': products_inc,       # [-]
         'bag_inc': bag_inc,                 # [-]
 
         'total_FCCS': total_FCCS,           # [ktCO2/yr]
         'total_BECCS': total_BECCS,         # [ktCO2/yr]
+        'total_CCS': total_FCCS + total_BECCS, # [ktCO2/yr]
         'total_FCCU': total_FCCU,           # [ktCO2/yr]
         'total_BCCU': total_BCCU,           # [ktCO2/yr]
+        'total_CCU': total_FCCU + total_BCCU, # [ktCO2/yr]
         'total_Ppenalty': total_Ppenalty,   # [MWh/yr]
         'total_Qpenalty': total_Qpenalty,   # [MWh/yr]
         'total_Qmethanol': total_Qmethanol, # [MWh/yr]
+
+        'potential_CCS': potential_CCS,   # [ktCO2/yr]
+        'potential_CCU': potential_CCU,   # [ktCO2/yr]
+        'n_plants': len([plant for plant in awarded_plants if plant['awarded']]), # [n]
     }
     return output
 
