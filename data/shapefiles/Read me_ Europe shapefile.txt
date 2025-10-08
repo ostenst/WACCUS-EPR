@@ -1,0 +1,26 @@
+This file contains European countries in a shapefile format that can be used in python, R or matlab.
+The file has been created by Drin Marmullaku based on GADM version 4.1 (https://gadm.org/) and distributed according to their license (https://gadm.org/license.html).
+
+Please cite as: Sevdari, Kristian; Marmullaku, Drin (2023). Shapefile of European countries. Technical University of Denmark. Dataset. https://doi.org/10.11583/DTU.23686383 This dataset is distributed under a CCBY-NC-SA 4.0 license
+
+Using the data to create maps for publishing of academic research articles is allowed. 
+Thus you can use the maps you made with GADM data for figures in articles published by PLoS, Springer Nature, Elsevier, MDPI, etc. 
+You are allowed (but not required) to publish these articles (and the maps they contain) under an open license such as CC-BY as is the case with PLoS journals and may be the case with other open access articles. 
+Data for the following countries is covered by a a different license Austria: 
+Creative Commons Attribution-ShareAlike 2.0 (source: Government of Austria)
+
+
+Example code for python:
+
+import geopandas as gpd
+import matplotlib.pyplot as plt
+
+# Load the shapefile
+shapefile_path = "path/to/your/Europe_merged.shp"
+gdf = gpd.read_file(shapefile_path)
+
+# Plot the shapefile
+gdf.plot()
+
+# Display the plot
+plt.show()

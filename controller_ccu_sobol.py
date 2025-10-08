@@ -37,9 +37,6 @@ shipping_df[cost_columns] = shipping_df[cost_columns] * SEK_to_EUR
 truck_df["EUR/ton"] = truck_df["SEK/ton"] * SEK_to_EUR
 truck_df = truck_df.drop(columns=["SEK/ton"])
 
-# Select research question
-research_question = "granulates" # Select either ["granulates", "products", "both"]
-
 model = Model("WACCUS", function=WACCUS_EPR)
 
 model.uncertainties = [
@@ -97,16 +94,19 @@ model.uncertainties = [
     CategoricalParameter("malmo", [0.5,1,2]),        # 1 [Mt/yr]
     CategoricalParameter("gothenburg", [0.5,1,2]),   # 1 [Mt/yr]
     CategoricalParameter("storage", ["oygarden", "kalundborg"]),
+
+    CategoricalParameter("tax", [50, 100, 150, 200, 250, 300]),     # 100 [EUR/tCO2]
+    RealParameter("recyclable", 0.05, 0.30),                        # 0.15 [-] fraction recyclable
 ]
 
 model.levers = [
-    CategoricalParameter("tax", [50, 100, 150, 200, 250, 300]),     # 100 [EUR/tCO2]
-    RealParameter("recyclable", 0.05, 0.15),                        # 0.15 [-] fraction recyclable
+    # CategoricalParameter("tax", [50, 100, 150, 200, 250, 300]),     # 100 [EUR/tCO2]
+    # RealParameter("recyclable", 0.05, 0.30),                        # 0.15 [-] fraction recyclable
 ]
 
 model.constants = [
-    Constant("question", research_question), # ["granulates", "products", "both"]
-    Constant("CCUS", "CCS"),            # ["CCS", "CCU"]
+    Constant("question", "granulates"), # ["granulates", "products", "both"]
+    Constant("CCUS", "CCU"),            # ["CCS", "CCU"]
     Constant("plants_df", plants_df),
     Constant("shipping_df", shipping_df),
     Constant("truck_df", truck_df),
@@ -141,15 +141,48 @@ model.outcomes = [
 ]
 
 ema_logging.log_to_stderr(ema_logging.INFO)
-n_scenarios = 250
-n_policies = 80
+n_scenarios = 40
+n_policies = 0
 
-# Regular LHS sampling:
-results = perform_experiments(model, n_scenarios, n_policies, uncertainty_sampling = Samplers.LHS, lever_sampling = Samplers.LHS)
+# If Sobol sampling:
+results = perform_experiments(model, n_scenarios, n_policies, uncertainty_sampling = Samplers.SOBOL, lever_sampling = Samplers.SOBOL)
 experiments, outcomes = results
 
-outcomes_df = pd.DataFrame(outcomes)
-experiments.to_csv("results/experiments_ccs.csv", index=False)
-outcomes_df.to_csv("results/outcomes_ccs.csv", index=False)
-print(outcomes_df)
-print("From Sobol analysis: CRC prices, taxation level, and ETS matter the most for total CCS capacity.")
+def analyze(results, ooi):
+    """analyze results using SALib sobol, returns a dataframe"""
+    _, outcomes = results
+
+    problem = get_SALib_problem(model.uncertainties)
+    y = outcomes[ooi]
+    sobol_indices = sobol.analyze(problem, y)
+    sobol_stats = {key: sobol_indices[key] for key in ["ST", "ST_conf", "S1", "S1_conf"]}
+    sobol_stats = pd.DataFrame(sobol_stats, index=problem["names"])
+    sobol_stats.sort_values(by="ST", ascending=False)
+    s2 = pd.DataFrame(sobol_indices["S2"], index=problem["names"], columns=problem["names"])
+    s2_conf = pd.DataFrame(
+        sobol_indices["S2_conf"], index=problem["names"], columns=problem["names"]
+    )
+    return sobol_stats, s2, s2_conf, problem
+
+sobol_stats, s2, s2_conf, problem = analyze(results, "total_CCU") # The outcome of interest
+print(sobol_stats)
+print(s2)
+print(s2_conf)
+sobol_stats = pd.DataFrame(sobol_stats, index=problem["names"])
+sobol_stats.to_csv("results/sobol_stats_ccu.csv")
+sobol_stats_sorted = sobol_stats.sort_values(by="ST", ascending=False)  # Ascending for better readability
+
+# Create horizontal bar plot
+plt.figure(figsize=(8, 10))  # Adjust figure size for better layout
+sns.barplot(
+    y=sobol_stats_sorted.index,  # Parameters on y-axis
+    x=sobol_stats_sorted["ST"],  # Sobol indices on x-axis
+    xerr=sobol_stats_sorted["ST_conf"],  # Confidence intervals as error bars
+    capsize=0.2,
+    color="crimson"
+)
+plt.ylabel("Parameter")
+plt.xlabel("Total Sobol Index (ST)")
+plt.title("Total-Order Sobol Indices with Confidence Intervals")
+plt.grid(axis="x", linestyle="--", alpha=0.7)
+plt.show()

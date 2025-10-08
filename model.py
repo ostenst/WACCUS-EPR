@@ -199,6 +199,149 @@ def ship_cost(annual_CO2, city, ship_distance, shipping_df, x, optimism="optimis
     shipping_cost = result * (1 + x["ship_uncertain"]) # [EUR/tCO2]
     return shipping_cost
 
+def get_property_at_temp(thermo_props, gas, T, property_name):
+    """
+    Get thermodynamic property at a specific temperature using interpolation.
+    
+    Args:
+        thermo_props: Dictionary of thermodynamic properties
+        gas: 'CO2' or 'H2'
+        T: Temperature in Kelvin
+        property_name: 'kappa', 'cp', or 'cv'
+    
+    Returns:
+        float: Interpolated property value
+    """
+    # Ensure temperature is within bounds
+    T = np.clip(T, thermo_props[gas]['temperatures'][0], thermo_props[gas]['temperatures'][-1])
+    
+    # Use numpy's interpolation
+    return np.interp(T, thermo_props[gas]['temperatures'], thermo_props[gas][property_name])
+
+def compression_energy(mcaptured, T1, P1, gas_type='CO2', n_stages=4, pressure_ratio=3.0, Tdiff=30, thermo_props=None, n_is=0.8, printing=False):
+    """
+    Calculate compression energy and cooling requirements for multi-stage compression.
+    # Setting target p and T according to [Beiron, 2025 (unpublished)]
+    Args:
+        mcaptured: Mass flow rate [kg/s]
+        T1: Initial temperature [K]
+        P1: Initial pressure [bar]
+        gas_type: Type of gas ('CO2' or 'H2')
+        n_stages: Number of compression stages
+        pressure_ratio: Pressure ratio per stage
+        Tdiff: Temperature difference for intercooling [K]
+        thermo_props: Dictionary of thermodynamic properties
+        n_is: Isentropic efficiency [-]
+        printing: Whether to print the results
+    
+    Returns:
+        tuple: (Wcomp_list, Qcool_list, P_list, T_list)
+            Wcomp_list: List of compression work for each stage [MW]
+            Qcool_list: List of cooling requirements for each stage [MW]
+            P_list: List of pressures at each stage [bar]
+            T_list: List of temperatures at each stage [K]
+    """
+    Wcomp_list = []
+    Qcool_list = []
+    P_list = [P1]
+    T_list = [T1]
+    
+    T = T1
+    P = P1
+    
+    for stage in range(n_stages):
+        # Get properties at current temperature
+        kappa = get_property_at_temp(thermo_props, gas_type, T, 'kappa')
+        cp_in = get_property_at_temp(thermo_props, gas_type, T, 'cp')
+        
+        # Calculate next pressure
+        P_next = P * pressure_ratio
+        P_list.append(P_next)
+        
+        # Calculate isentropic and actual temperatures
+        T_isentropic = T * (P_next/P)**((kappa-1)/kappa)
+        T_actual = T + (T_isentropic - T)/n_is
+        T_list.append(T_actual)
+        
+        # Get properties at actual temperature
+        cp_out = get_property_at_temp(thermo_props, gas_type, T_actual, 'cp')
+        
+        # Calculate work and cooling
+        Wcomp = mcaptured * (cp_in + cp_out)/2 * (T_actual - T)  # [kJ/s]
+        
+        # Calculate cooling only if not the last stage
+        Qcool = 0 if stage == n_stages - 1 else mcaptured * cp_out * (T_actual - (T + Tdiff))    # [kJ/s] 
+        
+        # Store results
+        Wcomp_list.append(Wcomp/1000)  # Convert to MW
+        Qcool_list.append(Qcool/1000)  # Convert to MW
+        
+        # Update temperature for next stage
+        T = T + Tdiff # NOTE: We neglect that temperatures wouldn't increase, but needs intercooling, and then final heating do synthesis temperature.
+        P = P_next
+    
+    if printing:
+        # Print summary table
+        print(f"\n{gas_type} Compression Summary:")
+        print("Stage | Pressure [bar] | Temperature [°C] | Work [MW] | Cooling [MW]")
+        print("------|---------------|------------------|-----------|-------------")
+        for i in range(len(Wcomp_list)):
+            print(f"{i+1:5d} | {P_list[i]:13.1f} | {T_list[i]-273.15:16.1f} | {Wcomp_list[i]:9.1f} | {Qcool_list[i]:11.1f}")
+        print(f"Final | {P_list[-1]:13.1f} | {T_list[-1]-273.15:16.1f} | {'-':9s} | {'-':11s}")
+        print(f"\nTotal compression work: {sum(Wcomp_list):.1f} MW")
+        print(f"Total cooling required: {sum(Qcool_list):.1f} MW")
+    
+    return Wcomp_list, Qcool_list, P_list, T_list
+
+def compression_cost(Wcomp_list, gas_type='CO2', printing=False):
+    """
+    Calculate the cost of compression stages using coefficients from Deng's paper.
+    
+    Args:
+        Wcomp_list: List of compression work for each stage [MW]
+        gas_type: Type of gas ('CO2' or 'H2')
+    
+    Returns:
+        tuple: (total_cost, stage_costs)
+            total_cost: Total cost of compression [EUR]
+            stage_costs: List of costs for each stage [EUR]
+    """
+    # Read coefficients from CSV
+    df = pd.read_csv("data/compression_costs.csv", index_col=0)
+    
+    # Initialize lists
+    stage_costs = []
+    
+    # Calculate cost for each stage
+    for i, Wstage in enumerate(Wcomp_list):
+        # Convert MW to kW
+        Wstage_kW = Wstage * 1000
+
+        # Get coefficients for this stage
+        a = df.loc['Coefficient a', f'Stage {i+1}']
+        b = df.loc['Coefficient b', f'Stage {i+1}']
+        c = df.loc['Coefficient c', f'Stage {i+1}']
+        
+        # Calculate cost using these equations [Deng, 2019]:
+        if i == 3:  # 4th stage (0-based indexing) has different equation
+            cost = a + b * Wstage_kW + c * Wstage_kW**0.5
+        else:
+            cost = a + b * Wstage_kW**1.5 + c * Wstage_kW**2
+        stage_costs.append(cost)
+    
+    total_cost = sum(stage_costs)
+    
+    # Print results
+    if printing:
+        print(f"\n{gas_type} Compression Costs:")
+        print("Stage | Work [MW] | Cost [EUR]")
+        print("------|-----------|------------")
+        for i, (Wstage, cost) in enumerate(zip(Wcomp_list, stage_costs)):
+            print(f"{i+1:5d} | {Wstage:9.1f} | {cost:10.0f}")
+        print(f"Total | {sum(Wcomp_list):9.1f} | {total_cost:10.0f}")
+        
+    return total_cost, stage_costs
+
 def plan_CCS(plant, c, x, l):
 
     # Burn fuel and capture/condition CO2
@@ -224,7 +367,7 @@ def plan_CCS(plant, c, x, l):
             Whp = P
         elif P < 0:             
             Whp = 0             
-    Qdh = Qdh + Qhex + Whp*x["COP"]
+    Qdh = Qdh + Qhex + Whp*x["COP"]               # Qfgc is not impacted!
     P -= Whp
     Ppenalty = (plant["P"] - P) * x["FLH"]        # [MWh/yr]
     Qpenalty = (plant["Qdh"] - Qdh) * x["FLH"]    # [MWh/yr]
@@ -276,12 +419,11 @@ def plan_CCS(plant, c, x, l):
     biogenic = 1 - fossil                                           # [tbiogenic/t] 
     fossil -= x["carbon_change"]
     biogenic += x["carbon_change"]
-    incentives = fossil * x["ETS"] + biogenic * x["CRC"]            # [EUR/tCO2]
-
-    bid = CAC - incentives          
-
     FCCS = annual_CO2 * fossil /1000                                # [ktCO2/yr]
     BECCS = annual_CO2 * biogenic /1000                             # [ktCO2/yr]
+    # incentives = fossil * x["ETS"] + biogenic * x["CRC"]          # [EUR/tCO2] not needed if bid consists of strike price
+
+    strike_price = CAC - biogenic * x["CRC"]                        # [EUR/tCO2] relative to a fossil ETS reference price
 
     cost_details = {
         'OPEXfix': OPEXfix,
@@ -293,11 +435,134 @@ def plan_CCS(plant, c, x, l):
         'CAC': CAC,
         'fossil_incentive': fossil * x['ETS'],
         'biogenic_incentive': biogenic * x['CRC'],
-        'incentives': incentives,
-        'bid': bid
+        # 'incentives': incentives,
+        'strike_price': strike_price
     }
 
-    return bid, FCCS, BECCS, Ppenalty, Qpenalty, cost_details # [MWh/yr]
+    return strike_price, FCCS, BECCS, Ppenalty, Qpenalty, cost_details # [MWh/yr]
+
+def plan_CCU(plant, c, x, l, plot_single=False):
+    
+    # Burn fuel and capture/condition CO2
+    mfuel = plant["Qwaste"] / (x["LHVf"]/3600) /3600    # [kgf/s]
+    mCO2 = mfuel* x["Ccontent"] * 44/12                 # [kgCO2/s]
+    mcaptured = mCO2 * x["capture_rate"]                # [kgCO2/s]
+    annual_CO2 = mcaptured/1000*3600 * x["FLH"]         # [tCO2/yr]
+    Qreb = mcaptured * x["q_reb"]                       # [MW]
+    Pcapture = x["p_capture"] * mcaptured/1000*3600     # [MW] 
+    Qhex = 0.64 * Qreb                                  # [MW] [Beiron, 2022]
+
+    # Compress CO2 and size CAPEX
+    T1 = 40 + 273.15  # Initial temperature [K] and pressure [bar] [Deng, 2019]
+    P1 = 1.0         
+    Wcomp_list, Qcool_list, P_list, T_list = compression_energy( 
+        mcaptured=mcaptured,
+        T1=T1,
+        P1=P1,
+        gas_type='CO2',
+        n_stages=3,
+        pressure_ratio=3.8,
+        Tdiff=30,
+        thermo_props=c["thermo_props"],
+        n_is=x["n_is"],
+        printing=False
+    )
+    Wcomp_CO2 = sum(Wcomp_list)  # [MW]
+    Qcool_CO2 = sum(Qcool_list)  # [MW]
+    CAPEX_compress_CO2, _ = compression_cost(Wcomp_list, 'CO2', printing=False) # [EUR]
+    CAPEXcomp_CO2 = levelize_kEUR(CAPEX_compress_CO2/1000, annual_CO2, x)        # [EUR/tCO2]
+    
+    # Produce H2 from AEL electrolyzer
+    Hi = 241.82                           # [kJ/molH2]
+    nCO2 = mcaptured/44                   # [kmol/s]
+    nH2 = nCO2 * 3                        # [kmol/s] synthesis stoichiometry
+    mH2 = nH2 * 2                         # [kg/s] 
+    QH2 = nH2 * Hi                        # [MW] 
+    PH2 = QH2/x["n_electrolyzer"]         # [MWel] 
+    Qrec_H2 = x["q_electrolyzer"] * PH2   # [MWth]
+
+    # Compress H2 and size CAPEX
+    T1 = 75 + 273.15        # [K] from [AEL tech, Table2.1 MSc Jacobsson & Palmgren, 2025]
+    P1 = 20                 # Initial pressure [bar], assumed based on [Danish Energy Agency]
+    Wcomp_list, Qcool_list, P_list, T_list = compression_energy(
+        mcaptured=mH2,
+        T1=T1,
+        P1=P1,
+        gas_type='H2',
+        n_stages=2,
+        pressure_ratio=1.7,
+        Tdiff=60,
+        thermo_props=c["thermo_props"],
+        n_is=x["n_is"],
+        printing=False
+    )
+    Wcomp_H2 = sum(Wcomp_list)  # [MW]
+    Qcool_H2 = sum(Qcool_list)  # [MW]
+    CAPEX_compress_H2, _ = compression_cost(Wcomp_list, 'H2', printing=False) # [EUR]
+    CAPEXcomp_H2 = levelize_kEUR(CAPEX_compress_H2/1000, annual_CO2, x)        # [EUR/tCO2]
+
+    # Produce methanol and extra Qdh - check Danish Agency Agency for method - we treat the whole synthesis plant as a single unit
+    Qsteam_synthesis = x['q_synthesis'] * QH2                # [MW] 
+    Qmethanol = x['n_synthesis'] * (QH2 + Qsteam_synthesis)  # [MW]
+    m_methanol = Qmethanol/x['LHVmethanol'] /1000*3600*24    # [t/day] 
+    Qrec_distill = x['q_distill'] * (QH2 + Qsteam_synthesis) # [MW] NOTE: optimistic assumption on heat recovery, from condensers at distillation
+    Qloss = 0.02 * (QH2 + Qsteam_synthesis)                  # [MW] 
+
+    # Penalize CHP and recover Qdh
+    P = plant["P"] * (1 - Qreb/plant["Qwaste"] - Qsteam_synthesis/plant["Qwaste"]) # live steam for synthesis
+    P = P - Pcapture - PH2 - Wcomp_CO2 - Wcomp_H2            # [MWel]
+    Qdh = plant["Qdh"] * (1 - Qreb/plant["Qwaste"] - Qsteam_synthesis/plant["Qwaste"])
+    Qdh = Qdh + Qcool_CO2 + Qcool_H2 + Qhex + (Qrec_H2 + Qrec_distill)*x["heat_optimism"] # [MW] the cooling is NECESSARY, the H2 recovery is uncertain
+
+    Ppenalty = (plant["P"] - P) * x["FLH"]          # [MWh/yr] probably very positive
+    Qpenalty = (plant["Qdh"] - Qdh) * x["FLH"]      # [MWh/yr] probably negative
+    Qmethanol = Qmethanol * x["FLH"]                # [MWh/yr] positive
+    
+    # Estimate CAPEX and OPEX of remaining units                                            # [tCO2/yr]
+    CAPEX_capture = x["CAPEXref_capture"] * (annual_CO2/(400*10**3)) ** x["k"] * x["CEPCI"] # [kEUR]
+    CAPEXlev_capture = levelize_kEUR(CAPEX_capture, annual_CO2, x)                          # [EUR/tCO2]
+    OPEXfix_capture = (CAPEX_capture*1000 * x["OPEXfix"]) / annual_CO2                      # [EUR/tCO2] 
+
+    CAPEX_H2 = x["CAPEXref_H2"] * PH2 * x["CEPCI"]                                          # [kEUR]
+    CAPEXlev_H2 = levelize_kEUR(CAPEX_H2, annual_CO2, x)                                    # [EUR/tCO2]
+    OPEXfix_H2 = (CAPEX_H2*1000 * x["OPEXfix"]) / annual_CO2                                # [EUR/tCO2]  
+
+    CAPEX_synthesis = x["CAPEXref_synthesis"] * m_methanol ** -0.315 *1000 * x["CEPCI"]     # [kEUR]
+    CAPEXlev_synthesis = levelize_kEUR(CAPEX_synthesis, annual_CO2, x)                      # [EUR/tCO2]
+    OPEXfix_synthesis = (CAPEX_synthesis*1000 * x["OPEXfix"]) / annual_CO2                  # [EUR/tCO2]
+
+    OPEXmakeup = x["camine"]                                                                # [EUR/tCO2]
+    OPEXenergy = (Ppenalty*x["celc"] + Qpenalty*x["celc"]*x["cheat"]) / annual_CO2          # [EUR/tCO2] positive celc negative cheat
+
+    # Calculate the methanol strike price
+    CAC = [CAPEXlev_capture,
+           OPEXfix_capture,
+           CAPEXlev_H2,
+           OPEXfix_H2,
+           CAPEXlev_synthesis,
+           OPEXfix_synthesis,
+           CAPEXcomp_CO2,
+           CAPEXcomp_H2,
+           OPEXmakeup,
+           OPEXenergy]
+    CAC = sum(CAC)                                                  # [EUR/tCO2]
+
+    methanol_cost = CAC/1000 * 44                                   # [EUR/kmolCO2 = EUR/kmolCH3OH]
+    methanol_cost = methanol_cost / 32                              # [EUR/kgCH3OH]
+    strike_price = methanol_cost*1000                               # [EUR/tCH3OH]
+
+    fossil = plant["Fossil"] / plant["Total"]                       # [tfossil/t] 
+    biogenic = 1 - fossil                                           # [tbiogenic/t] 
+    fossil -= x["carbon_change"]
+    biogenic += x["carbon_change"]
+    FCCU = annual_CO2 * fossil /1000                                # [ktCO2/yr]
+    BCCU = annual_CO2 * biogenic /1000                              # [ktCO2/yr]
+
+    cost_details = {                                                            
+        'CAC': CAC # Add later if needed
+    }
+
+    return strike_price, FCCU, BCCU, Ppenalty, Qpenalty, Qmethanol, cost_details # [MWh/yr]
 
 def WACCUS_EPR( 
     # constants
@@ -463,11 +728,11 @@ def WACCUS_EPR(
     bids = []
     for _, plant in plants_df.iterrows():
         if CCUS == "CCS":
-            bid, FCCS, BECCS, Ppenalty, Qpenalty, cost_details = plan_CCS(plant, c, x, l)
+            strike_price, FCCS, BECCS, Ppenalty, Qpenalty, cost_details = plan_CCS(plant, c, x, l)
             bids.append({
                 'type': 'CCS',
                 'name': plant['Name'],
-                'bid': bid,
+                'strike_price': strike_price,
                 'FCCS': FCCS,
                 'BECCS': BECCS,
                 'Ppenalty': Ppenalty,
@@ -475,25 +740,26 @@ def WACCUS_EPR(
                 'cost_details': cost_details
             })
 
-        # if CCUS == "CCU":
-        #     FCCU, BCCU, bid, Ppenalty, Qpenalty, Qmethanol = plan_CCU(plant, x)
-        #     bids.append({
-        #         'type': 'CCU',
-        #         'name': plant['Name'],
-        #         'bid': bid,
-        #         'FCCU': FCCU,
-        #         'BCCU': BCCU,
-        #         'Ppenalty': Ppenalty,
-        #         'Qpenalty': Qpenalty,
-        #         'Qmethanol': Qmethanol
-        #     })
-    bids.sort(key=lambda x: x['bid'])
+        if CCUS == "CCU":
+            strike_price, FCCU, BCCU, Ppenalty, Qpenalty, Qmethanol, cost_details = plan_CCU(plant, c, x, l)
+            bids.append({
+                'type': 'CCU',
+                'name': plant['Name'],
+                'strike_price': strike_price,
+                'FCCU': FCCU,
+                'BCCU': BCCU,
+                'Ppenalty': Ppenalty,
+                'Qpenalty': Qpenalty,
+                'Qmethanol': Qmethanol,
+                'cost_details': cost_details
+            })
+    bids.sort(key=lambda x: x['strike_price'])
     if print_auction:
         print("\nBids (sorted):")
-        print(f"{'Name':<25} {'Bid (EUR/tCO2)':>15} {'CAC (EUR/tCO2)':>18}")
+        print(f"{'Name':<25} {'Strike price (EUR/tCO2 or CH3OH)':>15} {'CAC (EUR/tCO2)':>18}")
         print("-" * 60)
         for bid in bids:
-            print(f"{bid['name']:<25} {bid['bid']:>15.2f} {bid['cost_details']['CAC']:>18.2f}")
+            print(f"{bid['name']:<25} {bid['strike_price']:>15.2f} {bid['cost_details']['CAC']:>18.2f}")
 
     # Run reverse auction
     remaining_fund = fund
@@ -501,7 +767,8 @@ def WACCUS_EPR(
     
     for bid in bids:
         if bid['type'] == 'CCS':
-            requested_amount = bid['bid'] * (bid['FCCS'] + bid['BECCS'])*1000 /(10**6) # [EUR/tCO2 * ktCO2/yr => MEUR/yr]
+            # requested_amount = bid['bid'] * (bid['FCCS'] + bid['BECCS'])*1000 /(10**6) # [EUR/tCO2 * ktCO2/yr => MEUR/yr]
+            requested_amount = (bid['strike_price'] - x['ETS']) * (bid['FCCS'] + bid['BECCS'])*1000 /(10**6) # [EUR/tCO2 * ktCO2/yr => MEUR/yr]
             awarded = requested_amount <= remaining_fund # [MEUR/yr]
             if awarded:
                 remaining_fund -= requested_amount
@@ -509,7 +776,7 @@ def WACCUS_EPR(
                 'name': bid['name'],
                 'type': bid['type'],
                 'awarded': awarded,
-                'bid': bid['bid'],
+                'strike': bid['strike_price'],
                 'FCCS': bid['FCCS'],
                 'BECCS': bid['BECCS'],
                 'CCStot': bid['FCCS'] + bid['BECCS'],
@@ -522,27 +789,27 @@ def WACCUS_EPR(
                 'amount': requested_amount if awarded else 0,
                 'cost_details': bid.get('cost_details', {})
             })
-        # else:  # CCU
-        #     requested_amount = bid['bid'] * (bid['FCCU'] + bid['BCCU'])*1000 /(10**6)
-        #     awarded = requested_amount <= remaining_fund
-        #     if awarded:
-        #         remaining_fund -= requested_amount
-        #     awarded_plants.append({
-        #         'name': bid['name'],
-        #         'type': bid['type'],
-        #         'awarded': awarded,
-        #         'bid': bid['bid'],
-        #         'FCCS': 0,
-        #         'BECCS': 0,
-        #         'CCStot': 0,
-        #         'Ppenalty': bid['Ppenalty'],
-        #         'Qpenalty': bid['Qpenalty'],
-        #         'FCCU': bid['FCCU'],
-        #         'BCCU': bid['BCCU'],
-        #         'CCUtot': bid['FCCU'] + bid['BCCU'],
-        #         'Qmethanol': bid['Qmethanol'],
-        #         'amount': requested_amount if awarded else 0
-        #     })
+        else:  # CCU
+            requested_amount = (bid['strike_price'] - x['pmethanol']) * (bid['Qmethanol']/ (x['LHVmethanol']/3600) /1000) /(10**6) # [MEUR/yr]
+            awarded = requested_amount <= remaining_fund
+            if awarded:
+                remaining_fund -= requested_amount
+            awarded_plants.append({
+                'name': bid['name'],
+                'type': bid['type'],
+                'awarded': awarded,
+                'strike': bid['strike_price'],
+                'FCCS': 0,
+                'BECCS': 0,
+                'CCStot': 0,
+                'Ppenalty': bid['Ppenalty'],
+                'Qpenalty': bid['Qpenalty'],
+                'FCCU': bid['FCCU'],
+                'BCCU': bid['BCCU'],
+                'CCUtot': bid['FCCU'] + bid['BCCU'],
+                'Qmethanol': bid['Qmethanol'],
+                'amount': requested_amount if awarded else 0
+            })
 
     if print_auction:
         print("\nSummary of auction:")
@@ -550,10 +817,10 @@ def WACCUS_EPR(
         print(f"Remaining fund: {remaining_fund:.2f} MEUR/yr")
         print(f"Number of plants awarded: {len([p for p in awarded_plants if p['awarded']])}")
         print("\nAwarded plants:")
-        print(f"{'Plant Name':<20} {'Type':<6} {'Awarded':<6} {'[EUR/t]':>10} {'[MEUR/yr]':>10} {'FCCS':>10} {'BECCS':>10} {'CCStot':>12} {'FCCU':>10} {'BCCU':>10} {'CCUtot':>12} {'Ppenalty':>12} {'Qpenalty':>12} {'Qmethanol':>12}")
+        print(f"{'Plant Name':<20} {'Type':<6} {'Awarded':<6} {'Strikepr':>10} {'[MEUR/yr]':>10} {'FCCS':>10} {'BECCS':>10} {'CCStot':>12} {'FCCU':>10} {'BCCU':>10} {'CCUtot':>12} {'Ppenalty':>12} {'Qpenalty':>12} {'Qmethanol':>12}")
         print("-" * 160)
         for plant in awarded_plants:
-            print(f"{plant['name']:<20} {plant['type']:<6} {str(plant['awarded']):<6} {plant['bid']:>10.2f} {plant['amount']:>10.2f} {plant['FCCS']:>10.2f} {plant['BECCS']:>10.2f} {plant['CCStot']:>12.2f} {plant['FCCU']:>10.2f} {plant['BCCU']:>10.2f} {plant['CCUtot']:>12.2f} {plant['Ppenalty']:>12.2f} {plant['Qpenalty']:>12.2f} {plant['Qmethanol']:>12.2f}")
+            print(f"{plant['name']:<20} {plant['type']:<6} {str(plant['awarded']):<6} {plant['strike']:>10.2f} {plant['amount']:>10.2f} {plant['FCCS']:>10.2f} {plant['BECCS']:>10.2f} {plant['CCStot']:>12.2f} {plant['FCCU']:>10.2f} {plant['BCCU']:>10.2f} {plant['CCUtot']:>12.2f} {plant['Ppenalty']:>12.2f} {plant['Qpenalty']:>12.2f} {plant['Qmethanol']:>12.2f}")
 
     # Calculate sums of awarded metrics
     total_FCCS = sum(plant['FCCS'] for plant in awarded_plants if plant['awarded'])
@@ -614,14 +881,14 @@ if __name__ == "__main__":
     # Run the model
     output = WACCUS_EPR(
         question="granulates",
-        CCUS="CCS", 
+        CCUS="CCU", 
         plants_df=plants_df, 
         shipping_df=shipping_df,
         truck_df=truck_df,
         compression_df=compression_df,
         thermo_props=thermo_props,    
         SEK_to_EUR=SEK_to_EUR,
-        print_auction=False,
+        print_auction=True,
     )
 
     print("\n----------------------------------------These are the simulation results:----------------------------------------")

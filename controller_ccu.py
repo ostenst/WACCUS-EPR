@@ -105,8 +105,8 @@ model.levers = [
 ]
 
 model.constants = [
-    Constant("question", research_question), # ["granulates", "products", "both"]
-    Constant("CCUS", "CCS"),            # ["CCS", "CCU"]
+    Constant("question", research_question), # Pick between ["granulates", "products", "both"]
+    Constant("CCUS", "CCU"),                 # Pick between ["CCS", "CCU"]
     Constant("plants_df", plants_df),
     Constant("shipping_df", shipping_df),
     Constant("truck_df", truck_df),
@@ -149,7 +149,7 @@ results = perform_experiments(model, n_scenarios, n_policies, uncertainty_sampli
 experiments, outcomes = results
 
 outcomes_df = pd.DataFrame(outcomes)
-experiments.to_csv("results/experiments_ccs.csv", index=False)
-outcomes_df.to_csv("results/outcomes_ccs.csv", index=False)
+experiments.to_csv("results/experiments_ccu.csv", index=False)
+outcomes_df.to_csv("results/outcomes_ccu.csv", index=False)
 print(outcomes_df)
-print("From Sobol analysis: CRC prices, taxation level, and ETS matter the most for total CCS capacity.")
+print("From Sobol analysis: electricity prices and taxation levels matter the most for total CCU capacity.")

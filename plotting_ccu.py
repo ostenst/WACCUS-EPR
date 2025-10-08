@@ -3,18 +3,18 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 # Load the results from the controller
-experiments = pd.read_csv('results/experiments_ccs.csv')
-outcomes_df = pd.read_csv('results/outcomes_ccs.csv')
+experiments = pd.read_csv('results/experiments_ccu.csv')
+outcomes_df = pd.read_csv('results/outcomes_ccu.csv')
 print("Number of scenarios originally:", len(experiments))
 
-# celc_filter = (experiments['celc'] > 50) & (experiments['celc'] <= 70) # Based on SEA long term scenarios
-# experiments = experiments[celc_filter]
-# outcomes_df = outcomes_df[celc_filter]
+celc_filter = (experiments['celc'] > 50) & (experiments['celc'] <= 70) # Based on SEA long term scenarios
+experiments = experiments[celc_filter]
+outcomes_df = outcomes_df[celc_filter]
 print("Number of scenarios remaining:", len(experiments))
 
 # Create box plot for total_CCS by tax level
-max_potential_CCS = outcomes_df["potential_CCS"].max()
-print("Maximum potential_CCS:", max_potential_CCS, "ktCO2/yr")
+max_potential_CCU = outcomes_df["potential_CCU"].max()
+print("Maximum potential_CCU:", max_potential_CCU, "ktCO2/yr")
 
 fig, ax = plt.subplots(figsize=(12, 6))
 tax_levels = experiments['tax'].unique()
@@ -26,11 +26,11 @@ box_labels = []
 fraction_10_plants = []
 for tax_level in tax_levels:
     mask = experiments['tax'] == tax_level
-    ccs_values = outcomes_df.loc[mask, 'total_CCS'].values
+    ccu_values = outcomes_df.loc[mask, 'total_CCU'].values
     n_plants_values = outcomes_df.loc[mask, 'n_plants'].values
     fraction_10 = np.sum(n_plants_values == 10) / len(n_plants_values)
     
-    box_data.append(ccs_values)
+    box_data.append(ccu_values)
     box_labels.append(f'{int(tax_level)}')
     fraction_10_plants.append(fraction_10)
 
@@ -51,8 +51,8 @@ for patch, fraction in zip(bp['boxes'], fraction_10_plants):
 #             bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
 
 # Add horizontal line for maximum potential CCS
-ax.axhline(y=max_potential_CCS, color='black', linestyle='--', linewidth=2, 
-           label=f'Max Potential CCS: {max_potential_CCS:.1f} ktCO2/yr')
+ax.axhline(y=max_potential_CCU, color='black', linestyle='--', linewidth=2, 
+           label=f'Max Potential CCU: {max_potential_CCU:.1f} ktCO2/yr')
 ax.legend()
 
 # Add colorbar
@@ -62,12 +62,12 @@ cbar = plt.colorbar(sm, ax=ax)
 cbar.set_label('Fraction of scenarios with n_plants=10', fontsize=12)
 
 ax.set_xlabel('Tax Level (EUR/tCO2)', fontsize=14)
-ax.set_ylabel('Total CCS (ktCO2/yr)', fontsize=14)
-ax.set_title('Total CCS by Tax Level\n(Colored by fraction of scenarios with n_plants=10)', fontsize=16)
+ax.set_ylabel('Total CCU (ktCO2/yr)', fontsize=14)
+ax.set_title('Total CCU by Tax Level\n(Colored by fraction of scenarios with n_plants=10)', fontsize=16)
 ax.tick_params(axis='both', which='major', labelsize=12)
 ax.grid(True, alpha=0.3)
 plt.tight_layout()
-plt.savefig('results/fig1_ccs_capacity.png', dpi=300, bbox_inches='tight')
+plt.savefig('results/fig1_ccu_capacity.png', dpi=300, bbox_inches='tight')
 
 
 
@@ -127,7 +127,7 @@ ax2.set_xlim(25, 325)
 ax2.tick_params(axis='both', which='major', labelsize=12)
 ax2.grid(True, alpha=0.3)
 plt.tight_layout()
-plt.savefig('results/fig1_ccs_increases.png', dpi=300, bbox_inches='tight')
+plt.savefig('results/fig1_ccu_increases.png', dpi=300, bbox_inches='tight')
 
 
 
@@ -172,5 +172,5 @@ ax3.set_title('Fund by Tax Level\n(Colored by fraction of scenarios with n_plant
 ax3.tick_params(axis='both', which='major', labelsize=12)
 ax3.grid(True, alpha=0.3)
 plt.tight_layout()
-plt.savefig('results/fig1_ccs_fund.png', dpi=300, bbox_inches='tight')
+plt.savefig('results/fig1_ccu_fund.png', dpi=300, bbox_inches='tight')
 plt.show()

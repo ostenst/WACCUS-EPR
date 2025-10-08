@@ -83,8 +83,8 @@ model.uncertainties = [
     RealParameter("camine", 40, 50),                # 44 [SEK/tCO2]
     RealParameter("celc", 30, 100),                 # 60 [EUR/MWh]
     RealParameter("cheat", 0.50, 0.95),             # 0.75 [% of elc]
-    RealParameter("CRC", 50, 300),                  # 100 [EUR/tCO2]
-    RealParameter("ETS", 50, 250),                  # 80 [EUR/tCO2]
+    RealParameter("CRC", 50, 200),                  # 100 [EUR/tCO2]
+    RealParameter("ETS", 50, 200),                  # 80 [EUR/tCO2]
     RealParameter("pmethanol", 550, 700),           # 625 [EUR/t]
 
     RealParameter("ship_uncertain", -0.15, 0.15),    # 0.10 [-]
@@ -164,12 +164,12 @@ def analyze(results, ooi):
     )
     return sobol_stats, s2, s2_conf, problem
 
-sobol_stats, s2, s2_conf, problem = analyze(results, "total_CCS")
+sobol_stats, s2, s2_conf, problem = analyze(results, "total_CCS") # The outcome of interest
 print(sobol_stats)
 print(s2)
 print(s2_conf)
 sobol_stats = pd.DataFrame(sobol_stats, index=problem["names"])
-sobol_stats.to_csv("sobol_stats.csv")
+sobol_stats.to_csv("results/sobol_stats_ccs.csv")
 sobol_stats_sorted = sobol_stats.sort_values(by="ST", ascending=False)  # Ascending for better readability
 
 # Create horizontal bar plot
