@@ -423,6 +423,8 @@ def plan_CCS(plant, c, x, l):
     BECCS = annual_CO2 * biogenic /1000                             # [ktCO2/yr]
     # incentives = fossil * x["ETS"] + biogenic * x["CRC"]          # [EUR/tCO2] not needed if bid consists of strike price
 
+    if x["CRC"] < x["ETS"]:
+        x["CRC"] = x["ETS"] # In such cases (~50%), CRCs are assumed integrated into the ETS
     strike_price = CAC - biogenic * x["CRC"]                        # [EUR/tCO2] relative to a fossil ETS reference price
 
     cost_details = {
@@ -621,7 +623,7 @@ def WACCUS_EPR(
     celc = 60,              # [EUR/MWh]
     cheat = 0.75,           # [% of elc]
     CRC = 100,              # [EUR/tCO2]
-    ETS = 80,               # [EUR/tCO2]
+    ETS = 80,               # [EUR/tCO2] Use this report: The EU-ETS Price Through 2030 and Beyond: A closer look at drivers, models and assumptions (https://www.ecologic.eu/19034)
     pmethanol = 625,        # [EUR/t] [MSc Omar & Widgren, 2025]
 
     ship_uncertain = 0.10,  # [-] [-0.15,0.15]

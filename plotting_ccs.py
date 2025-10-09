@@ -27,12 +27,26 @@ fraction_10_plants = []
 for tax_level in tax_levels:
     mask = experiments['tax'] == tax_level
     ccs_values = outcomes_df.loc[mask, 'total_CCS'].values
+    fccs_values = outcomes_df.loc[mask, 'total_FCCS'].values
+    beccs_values = outcomes_df.loc[mask, 'total_BECCS'].values
     n_plants_values = outcomes_df.loc[mask, 'n_plants'].values
     fraction_10 = np.sum(n_plants_values == 10) / len(n_plants_values)
+    
+    # Calculate statistics for FCCS and BECCS (80% confidence intervals)
+    fccs_mean = np.mean(fccs_values)
+    fccs_p10 = np.percentile(fccs_values, 10)
+    fccs_p90 = np.percentile(fccs_values, 90)
+    
+    beccs_mean = np.mean(beccs_values)
+    beccs_p10 = np.percentile(beccs_values, 10)
+    beccs_p90 = np.percentile(beccs_values, 90)
     
     box_data.append(ccs_values)
     box_labels.append(f'{int(tax_level)}')
     fraction_10_plants.append(fraction_10)
+    print(f"Tax level: {tax_level}, %n_plants=10: {fraction_10}")
+    print(f"  FCCS - Mean: {fccs_mean:.1f}, 80% range: {fccs_p10:.1f}-{fccs_p90:.1f} ktCO2/yr")
+    print(f"  BECCS - Mean: {beccs_mean:.1f}, 80% range: {beccs_p10:.1f}-{beccs_p90:.1f} ktCO2/yr")
 
 # Create box plot with colored boxes
 bp = ax.boxplot(box_data, tick_labels=box_labels, patch_artist=True)
@@ -51,9 +65,9 @@ for patch, fraction in zip(bp['boxes'], fraction_10_plants):
 #             bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
 
 # Add horizontal line for maximum potential CCS
-ax.axhline(y=max_potential_CCS, color='black', linestyle='--', linewidth=2, 
-           label=f'Max Potential CCS: {max_potential_CCS:.1f} ktCO2/yr')
-ax.legend()
+# ax.axhline(y=max_potential_CCS, color='black', linestyle='--', linewidth=2, 
+#            label=f'Max Potential CCS: {max_potential_CCS:.1f} ktCO2/yr')
+# ax.legend()
 
 # Add colorbar
 sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=0, vmax=1))
@@ -75,7 +89,7 @@ plt.savefig('results/fig1_ccs_capacity.png', dpi=300, bbox_inches='tight')
 fig2, ax2 = plt.subplots(figsize=(12, 6))
 
 # Define tax levels to plot
-violin_tax_levels = [50, 100, 150, 200, 250, 300]
+violin_tax_levels = [50, 80, 110, 140, 170, 200, 230]
 price_metrics = ['granulates_inc', 'products_inc', 'bag_inc']
 
 # Color violins using the same colormap and fraction as the first figure
@@ -154,11 +168,11 @@ for patch, fraction in zip(bp3['boxes'], fraction_10_plants):
     patch.set_facecolor(color)
     patch.set_alpha(1.0)
 
-# Add annotations for fraction values
-for i, (fraction, tax_level) in enumerate(zip(fraction_10_plants, tax_levels)):
-    ax3.text(i + 1, np.median(fund_box_data[i]), f'{fraction:.2f}', 
-            ha='center', va='top', fontweight='bold', fontsize=10,
-            bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
+# # Add annotations for fraction values
+# for i, (fraction, tax_level) in enumerate(zip(fraction_10_plants, tax_levels)):
+#     ax3.text(i + 1, np.median(fund_box_data[i]), f'{fraction:.2f}', 
+#             ha='center', va='top', fontweight='bold', fontsize=10,
+#             bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
 
 # Add colorbar
 sm3 = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=0, vmax=1))

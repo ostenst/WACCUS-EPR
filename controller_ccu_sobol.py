@@ -47,7 +47,7 @@ model.uncertainties = [
     RealParameter("mbag", 3*10**-6, 7*10**-6),      # 5*10**-6 [t/bag]
     RealParameter("pbag", 3, 6),                    # 4 [SEK/bag]
     RealParameter("cfraction", 0.80, 0.90),         # 0.85 [-] cfraction of carbon in plastic
-    RealParameter("circulated", 0.00, 0.15),        # 0.10 [-] fraction of granulates circulated
+    RealParameter("circulated", 0.00, 0.20),        # 0.10 [-] fraction of granulates circulated
 
     RealParameter("FLH", 7700, 8300),               # 8000 [h/yr]
     RealParameter("capture_rate", 0.85, 0.95),      # 0.90 [-]
@@ -66,7 +66,7 @@ model.uncertainties = [
     RealParameter("n_synthesis", 0.76, 0.82),       # 0.78 [MWmethanol/MWH2+steam]
     RealParameter("q_distill", 0.18, 0.22),         # 0.20 [MWth/MWH2+steam]
     RealParameter("COP", 2.5, 3.5),                 # 3 [MWth/MWel]
-    RealParameter("heat_optimism", 0.20, 1.00),     # 0.70 [-] % of waste heat recoverable
+    RealParameter("heat_optimism", 0.00, 1.00),     # 0.70 [-] % of waste heat recoverable
 
     RealParameter("CAPEXref_capture", 300000, 340000),  # 3550*0.09*1000=319500 [kEUR] @400 ktCO2/yr
     RealParameter("CAPEXref_HP", 0.80, 0.92),                           # 0.86[MEUR/MWth]
@@ -83,8 +83,8 @@ model.uncertainties = [
     RealParameter("camine", 40, 50),                # 44 [SEK/tCO2]
     RealParameter("celc", 30, 100),                 # 60 [EUR/MWh]
     RealParameter("cheat", 0.50, 0.95),             # 0.75 [% of elc]
-    RealParameter("CRC", 50, 200),                  # 100 [EUR/tCO2]
-    RealParameter("ETS", 50, 200),                  # 80 [EUR/tCO2]
+    RealParameter("CRC", 50, 250),                  # 100 [EUR/tCO2] although assumed always >= ETS prices!
+    RealParameter("ETS", 50, 250),                  # 80 [EUR/tCO2]
     RealParameter("pmethanol", 550, 700),           # 625 [EUR/t]
 
     RealParameter("ship_uncertain", -0.15, 0.15),    # 0.10 [-]
@@ -95,7 +95,7 @@ model.uncertainties = [
     CategoricalParameter("gothenburg", [0.5,1,2]),   # 1 [Mt/yr]
     CategoricalParameter("storage", ["oygarden", "kalundborg"]),
 
-    CategoricalParameter("tax", [50, 100, 150, 200, 250, 300]),     # 100 [EUR/tCO2]
+    CategoricalParameter("tax", [50, 80, 110, 140, 170, 200, 230]), # 100 [EUR/tCO2]
     RealParameter("recyclable", 0.05, 0.30),                        # 0.15 [-] fraction recyclable
 ]
 
