@@ -49,7 +49,7 @@ model.uncertainties = [
     RealParameter("pgranulates", 11000, 15000),     # 13000 [SEK/tpl]
     RealParameter("mbag", 3*10**-6, 7*10**-6),      # 5*10**-6 [t/bag]
     RealParameter("pbag", 3, 6),                    # 4 [SEK/bag]
-    RealParameter("cfraction", 0.80, 0.90),         # 0.85 [-] cfraction of carbon in plastic
+    RealParameter("cfraction", 0.70, 0.80),         # 0.75 [-] cfraction of carbon in plastic
     RealParameter("circulated", 0.00, 0.20),        # 0.10 [-] fraction of granulates circulated
 
     RealParameter("FLH", 7700, 8300),               # 8000 [h/yr]
@@ -113,6 +113,7 @@ model.constants = [
     Constant("compression_df", compression_df),
     Constant("thermo_props", thermo_props),
     Constant("SEK_to_EUR", SEK_to_EUR),
+    Constant("profit", 0.10), # 10% profit margin
     Constant("print_auction", False),
 ]
 

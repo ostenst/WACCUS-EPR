@@ -16,7 +16,7 @@ print("Number of scenarios remaining:", len(experiments))
 max_potential_CCS = outcomes_df["potential_CCS"].max()
 print("Maximum potential_CCS:", max_potential_CCS, "ktCO2/yr")
 
-fig, ax = plt.subplots(figsize=(12, 6))
+fig, ax = plt.subplots(figsize=(12, 5))
 tax_levels = experiments['tax'].unique()
 tax_levels = sorted(tax_levels)  # Sort tax levels for better visualization
 
@@ -85,48 +85,56 @@ plt.savefig('results/fig1_ccs_capacity.png', dpi=300, bbox_inches='tight')
 
 
 
-# Create violin plot for price increases at multiple tax levels
-fig2, ax2 = plt.subplots(figsize=(12, 6))
+# Create box plot for price increases at multiple tax levels
+fig2, ax2 = plt.subplots(figsize=(12, 5))
 
 # Define tax levels to plot
-violin_tax_levels = [50, 80, 110, 140, 170, 200, 230]
-price_metrics = ['granulates_inc', 'products_inc', 'bag_inc']
+box_tax_levels = [50, 80, 110, 140, 170, 200, 230]
+price_metrics = ['granulates_inc', 'products_inc']
 
-# Color violins using the same colormap and fraction as the first figure
+# Color boxes using the same colormap and fraction as the first figure
 cmap = plt.cm.magma
 
-# Create violins for each tax level
-for tax_level in violin_tax_levels:
+# Create box plots for each tax level
+for tax_level in box_tax_levels:
     # Filter data for current tax level
     tax_mask = experiments['tax'] == tax_level
-    violin_data = []
+    box_data = []
     for metric in price_metrics:
         values = outcomes_df.loc[tax_mask, metric].values
-        violin_data.append(values)
+        box_data.append(values)
     
-    # Create violins positioned around the tax level
-    violin_positions = [tax_level - 10, tax_level, tax_level + 10]
-    parts = ax2.violinplot(violin_data, positions=violin_positions, 
-                           showmeans=False, showmedians=True, widths=25)
+    # Create box plots positioned around the tax level
+    box_positions = [tax_level - 6, tax_level + 6]
+    bp = ax2.boxplot(box_data, positions=box_positions, 
+                     patch_artist=True, widths=12)
     
-    # Color violins using the same colormap and fraction as the corresponding boxplot
+    # Color boxes using the same colormap and fraction as the corresponding boxplot
     tax_index = list(tax_levels).index(tax_level)
     fraction = fraction_10_plants[tax_index]
     
-    for i, pc in enumerate(parts['bodies']):
+    for i, patch in enumerate(bp['boxes']):
         color = cmap(fraction)  # Use the same fraction as the corresponding tax level
-        pc.set_facecolor(color)
-        pc.set_alpha(1.0)
+        patch.set_facecolor(color)
+        patch.set_alpha(1.0)
     
     # Color all whiskers and median lines black
-    for key in ['cmeans', 'cmedians', 'cbars', 'cmins', 'cmaxes']:
-        if key in parts:
-            parts[key].set_color('black')
-            parts[key].set_linewidth(1.5)
+    for key in ['whiskers', 'caps', 'medians', 'fliers']:
+        if key in bp:
+            for element in bp[key]:
+                element.set_color('black')
+                element.set_linewidth(1.5)
 
 # Set x-axis to show all tax levels
-ax2.set_xticks(violin_tax_levels)
-ax2.set_xticklabels([str(level) for level in violin_tax_levels])
+ax2.set_xticks(box_tax_levels)
+ax2.set_xticklabels([str(level) for level in box_tax_levels])
+ax2.set_xlim(35, 245)
+
+# # Add legend for the two metrics
+# from matplotlib.patches import Patch
+# # legend_elements = [Patch(facecolor='gray', alpha=0.7, label='Granulates'),
+# #                    Patch(facecolor='gray', alpha=0.7, label='Products')]
+# # # ax2.legend(handles=legend_elements, loc='upper left')
 
 # Add colorbar
 sm2 = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=0, vmax=1))
@@ -136,8 +144,7 @@ cbar2.set_label('Fraction of scenarios with n_plants=10', fontsize=12)
 
 ax2.set_xlabel('Tax Level (EUR/tCO2)', fontsize=14)
 ax2.set_ylabel('Price Increase [-]', fontsize=14)
-ax2.set_title('Price Increase Distribution at Tax Levels 50-300 EUR/tCO2', fontsize=16)
-ax2.set_xlim(25, 325)
+ax2.set_title('Price Increase Distribution at Tax Levels 50-230 EUR/tCO2', fontsize=16)
 ax2.tick_params(axis='both', which='major', labelsize=12)
 ax2.grid(True, alpha=0.3)
 plt.tight_layout()

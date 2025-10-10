@@ -426,6 +426,7 @@ def plan_CCS(plant, c, x, l):
     if x["CRC"] < x["ETS"]:
         x["CRC"] = x["ETS"] # In such cases (~50%), CRCs are assumed integrated into the ETS
     strike_price = CAC - biogenic * x["CRC"]                        # [EUR/tCO2] relative to a fossil ETS reference price
+    strike_price = strike_price * (1 + c["profit"])
 
     cost_details = {
         'OPEXfix': OPEXfix,
@@ -552,6 +553,7 @@ def plan_CCU(plant, c, x, l, plot_single=False):
     methanol_cost = CAC/1000 * 44                                   # [EUR/kmolCO2 = EUR/kmolCH3OH]
     methanol_cost = methanol_cost / 32                              # [EUR/kgCH3OH]
     strike_price = methanol_cost*1000                               # [EUR/tCH3OH]
+    strike_price = strike_price * (1 + c["profit"])
 
     fossil = plant["Fossil"] / plant["Total"]                       # [tfossil/t] 
     biogenic = 1 - fossil                                           # [tbiogenic/t] 
@@ -576,6 +578,7 @@ def WACCUS_EPR(
     compression_df=None,
     thermo_props=None,    
     SEK_to_EUR=0.091,
+    profit=0.10,
     print_auction=False,
 
     # uncertainties
@@ -644,6 +647,7 @@ def WACCUS_EPR(
         "truck_df": truck_df,
         "compression_df": compression_df,
         "thermo_props": thermo_props,
+        "profit": profit,
     }
     x = {
         "mKN39": mKN39,
@@ -890,6 +894,7 @@ if __name__ == "__main__":
         compression_df=compression_df,
         thermo_props=thermo_props,    
         SEK_to_EUR=SEK_to_EUR,
+        profit=0.10,
         print_auction=True,
     )
 
