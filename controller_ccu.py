@@ -38,7 +38,7 @@ truck_df["EUR/ton"] = truck_df["SEK/ton"] * SEK_to_EUR
 truck_df = truck_df.drop(columns=["SEK/ton"])
 
 # Select research question
-research_question = "granulates" # Select either ["granulates", "products", "both"]
+research_question = "products" # Select either ["granulates", "products", "both"]
 
 model = Model("WACCUS", function=WACCUS_EPR)
 

@@ -638,7 +638,7 @@ def WACCUS_EPR(
     storage = "oygarden",   # ["oygarden", "kalundborg"]
 
     # levers
-    tax = 100,          # [EUR/tCO2] [50, 400] NOTE: explore discrete ranges => easier to visualize later
+    tax = 80,          # [EUR/tCO2] [50, 400] NOTE: explore discrete ranges => easier to visualize later
     recyclable = 0.15,  # [-] fraction of products possible to recycle mechanically (exempt from tax), determined by policy criteria
 ):
     # Store constants, uncertainties (converted to EUR or CEPCI), and levers
@@ -828,6 +828,78 @@ def WACCUS_EPR(
         for plant in awarded_plants:
             print(f"{plant['name']:<20} {plant['type']:<6} {str(plant['awarded']):<6} {plant['strike']:>10.2f} {plant['amount']:>10.2f} {plant['FCCS']:>10.2f} {plant['BECCS']:>10.2f} {plant['CCStot']:>12.2f} {plant['FCCU']:>10.2f} {plant['BCCU']:>10.2f} {plant['CCUtot']:>12.2f} {plant['Ppenalty']:>12.2f} {plant['Qpenalty']:>12.2f} {plant['Qmethanol']:>12.2f}")
 
+    # Plot merit order curve
+    if print_auction:
+        plt.figure(figsize=(12, 8))
+        plant_names = [plant['name'] for plant in awarded_plants]
+        strike_prices = [plant['strike'] for plant in awarded_plants]
+        awarded_status = [plant['awarded'] for plant in awarded_plants]
+        ccstot_values = [plant['CCStot'] for plant in awarded_plants]
+        
+        threshold = 100
+        
+        # Create cumulative capacity for x-axis
+        cumulative_capacity = np.cumsum(ccstot_values)
+        
+        # Create two separate line series for the stacked effect
+        below_threshold = [min(price, threshold) for price in strike_prices]
+        above_threshold = [max(0, price - threshold) for price in strike_prices]
+        
+        # Plot each plant's area individually
+        for i, (below, above, ccstot) in enumerate(zip(below_threshold, above_threshold, ccstot_values)):
+            x_start = cumulative_capacity[i] - ccstot
+            x_end = cumulative_capacity[i]
+            
+            # Fill below threshold portion
+            if below > 0:
+                plt.fill_between([x_start, x_end], 0, below, color='gray', alpha=0.7, step='post')
+            
+            # Fill above threshold portion
+            if above > 0:
+                plt.fill_between([x_start, x_end], below, below + above, color='crimson', alpha=0.7, step='post')
+            
+            # Draw black outline around the entire plant area
+            plt.plot([x_start, x_end, x_end, x_start, x_start], 
+                    [0, 0, below + above, below + above, 0], 'k-', linewidth=1.5)
+        
+        # Add dashed pattern overlay for awarded plants
+        for i, (awarded, below, above, ccstot) in enumerate(zip(awarded_status, below_threshold, above_threshold, ccstot_values)):
+            if awarded:
+                x_start = cumulative_capacity[i] - ccstot
+                x_end = cumulative_capacity[i]
+                # Add dashed pattern for below threshold portion
+                if below > 0:
+                    plt.fill_between([x_start, x_end], 0, below, color='gray', alpha=0.7, hatch='///', step='post', edgecolor='black', linewidth=0.5)
+                # Add dashed pattern for above threshold portion
+                if above > 0:
+                    plt.fill_between([x_start, x_end], below, below + above, color='crimson', alpha=0.7, hatch='///', step='post', edgecolor='black', linewidth=0.5)
+        
+        plt.xlabel('Cumulative CCS Capacity (ktCO2/yr)', fontsize=14)
+        plt.ylabel('Strike Price (EUR/tCO2 or tCH3OH)', fontsize=14)
+        plt.title('Merit Order Curve - Strike Prices vs CCS Capacity', fontsize=16)
+        plt.xticks(fontsize=14)
+        plt.yticks(fontsize=14)
+        plt.ylim(0, max(strike_prices)*1.33)
+        plt.grid(True, alpha=0.3)
+        
+        # Add horizontal line at threshold
+        plt.axhline(y=threshold, color='black', linestyle='--', alpha=0.7, linewidth=2)
+        
+        # # Add legend
+        # from matplotlib.patches import Patch
+        # legend_elements = [Patch(facecolor='gray', alpha=0.7, label=f'Below {threshold}'),
+        #                   Patch(facecolor='crimson', alpha=0.7, label=f'Above {threshold}'),
+        #                   Patch(facecolor='gray', alpha=0.3, hatch='///', label='Awarded')]
+        # plt.legend(handles=legend_elements, fontsize=14)
+        
+        # Add plant labels at the center of each capacity segment
+        for i, (name, price, ccstot) in enumerate(zip(plant_names, strike_prices, ccstot_values)):
+            x_pos = cumulative_capacity[i] - ccstot/2
+            plt.text(x_pos, price + price*0.005, f'{price:.0f}', 
+                    ha='center', va='bottom', fontsize=12, rotation=0)
+        plt.tight_layout()
+        plt.savefig('results/fig3_auction.png', dpi=300, bbox_inches='tight')
+
     # Calculate sums of awarded metrics
     total_FCCS = sum(plant['FCCS'] for plant in awarded_plants if plant['awarded'])
     total_BECCS = sum(plant['BECCS'] for plant in awarded_plants if plant['awarded'])
@@ -887,7 +959,7 @@ if __name__ == "__main__":
     # Run the model
     output = WACCUS_EPR(
         question="granulates",
-        CCUS="CCU", 
+        CCUS="CCS", 
         plants_df=plants_df, 
         shipping_df=shipping_df,
         truck_df=truck_df,
@@ -913,4 +985,7 @@ if __name__ == "__main__":
     print("\nTotal Ppenalty:", output["total_Ppenalty"]/1000, " [GWh/yr]")
     print("Total Qpenalty:", output["total_Qpenalty"]/1000, " [GWh/yr]")
     print("Total Qmethanol:", output["total_Qmethanol"]/1000, " [GWh/yr]")
+    
+    plt.show()
+
     
