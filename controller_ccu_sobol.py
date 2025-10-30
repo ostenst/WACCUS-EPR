@@ -74,7 +74,7 @@ model.uncertainties = [
     RealParameter("CAPEXref_synthesis", 1.600, 2.000),                  # 1.8749 [MEUR]
     RealParameter("CAPEXref_loading", 58000000, 68000000),              # 63000000 [SEK] @150 ktCO2/yr
     RealParameter("CAPEXref_train", 8000000, 9000000),                  # 8610000 [EUR]
-    RealParameter("k", 0.65, 0.69),                                     # 0.67[-] economy-of-scale factor
+    RealParameter("k", 0.57, 0.77),                                     # 0.67[-] economy-of-scale factor
     RealParameter("CEPCI", 850, 950),                                   # 900 [-]
 
     RealParameter("OPEXfix", 0.02, 0.04),           # 0.02 [-] % of base CAPEX

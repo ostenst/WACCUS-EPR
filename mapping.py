@@ -2,6 +2,7 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 import pandas as pd
 import matplotlib.patheffects as path_effects
+import matplotlib.cm as cm
 
 def plot_europe():
     """Plot a part of Europe using the shapefile data."""
@@ -24,6 +25,14 @@ def plot_europe():
     
     # Read plants data from plants.csv
     plants_df = pd.read_csv("data/plants.csv")
+    plants_df["color"] = plants_df["Biogenic"] / (plants_df["Biogenic"] + plants_df["Fossil"])
+
+    granulates_diameter = 1258600*0.85 *3.66 # [tCO2/yr]
+    print(granulates_diameter)
+    granulates_coordinates = (58, 11.8)
+    products_diameter = 884300*0.85 *3.66 # [tCO2/yr]
+    print(products_diameter)
+    products_coordinates = (56, 5)
 
     # Print the sum of the Totals
     total_sum = plants_df['Total'].sum()
@@ -43,40 +52,13 @@ def plot_europe():
     # Plot the landmass
     europe.plot(ax=ax, edgecolor="black", facecolor="whitesmoke")
     
-    # Plot origins as crimson diamonds
-    for name, lon, lat in origins:
-        ax.scatter(lon, lat, marker='D', s=75, color='crimson', edgecolor='black', linewidth=1, zorder=5)
+    # # Plot origins as crimson diamonds
+    # for name, lon, lat in origins:
+    #     ax.scatter(lon, lat, marker='D', s=75, color='crimson', edgecolor='black', linewidth=1, zorder=5)
     
     # Plot destinations as crimson diamonds
     for name, lon, lat in destinations:
-        ax.scatter(lon, lat, marker='D', s=75, color='maroon', edgecolor='black', linewidth=1, zorder=5)
-    
-    # Hard-coded list of plants that should be colored blue
-    # green_plants = [
-    #     "Renova",
-    #     "Hogdalenverket", 
-    #     "Sjolunda",
-    #     "Korstaverket",
-    #     "Garstadverket",
-    #     "Vasteras KVV",
-    #     "Handeloverket",
-    #     "Bolanderna",
-    #     "Filbornaverket",
-    #     "Bristaverket"
-    # ]
-    green_plants = [
-        "Renova",
-        "Hogdalenverket", 
-        "Sjolunda",
-        "Bristaverket",
-        "Garstadverket",
-        "Vasteras KVV",
-        "Handeloverket",
-        "Bolanderna",
-        "Filbornaverket",
-        "Hogbytorp"
-    ]
-    # green_plants = []
+        ax.scatter(lon, lat, marker='D', s=140, color='deepskyblue', edgecolor='black', linewidth=1, zorder=5)
     
     # Sort plants by Total value and identify the 10 largest
     plants_sorted = plants_df.sort_values('Total', ascending=False)
@@ -87,22 +69,36 @@ def plot_europe():
     for i, (_, plant) in enumerate(top_10_plants.iterrows(), 1):
         print(f"{i:2d}. {plant['Name']}: {plant['Total']:.1f} ktCO2/yr")
     
-    # Plot all plants with different colors based on hard-coded list
+    # Get the magma colormap
+    magma_colormap = cm.get_cmap('magma')
+
+    # Scale bubbles
+    scaling = 1.2
+
+    # Plot granulates and products as grey bubbles
+    ax.scatter(granulates_coordinates[1], granulates_coordinates[0], s=granulates_diameter/1000 * scaling, color='grey', alpha=0.8, edgecolor='black', linewidth=0.5, zorder=4)
+    ax.scatter(products_coordinates[1], products_coordinates[0], s=products_diameter/1000 * scaling, color='grey', alpha=0.8, edgecolor='black', linewidth=0.5, zorder=4)
+    ax.scatter(products_coordinates[1], products_coordinates[0], s=products_diameter/1000 * scaling *1.5, color='grey', alpha=0.8, edgecolor='black', linewidth=0.5, zorder=4)
+
+    # Collect plant data for plotting
+    lons = []
+    lats = []
+    sizes = []
+    colors = []
+    
     for _, plant in plants_df.iterrows():
-        lat, lon = plant['Latitude'], plant['Longitude']
+        lons.append(plant['Longitude'])
+        lats.append(plant['Latitude'])
         total_value = plant['Total']
-        # Scale the bubble size - adjust the scaling factor as needed
-        bubble_size = total_value * 1.2  # Much smaller scaling factor to fit bubbles on map
-        
-        # Color plants based on hard-coded list: blue if in list, grey otherwise
-        if plant['Name'] in green_plants:
-            color = 'deepskyblue' #mediumseagreen
-            alpha = 0.8
-        else:
-            color = 'grey'
-            alpha = 0.4
-            
-        ax.scatter(lon, lat, s=bubble_size, color=color, alpha=alpha, edgecolor='black', linewidth=0.5, zorder=4)
+        sizes.append(total_value * scaling)  # Scale bubble size
+        colors.append(plant['color'])  # Normalized 0-1
+    
+    # Plot all plants with colors based on their 'color' value using magma colormap
+    scatter = ax.scatter(lons, lats, s=sizes, c=colors, cmap='magma', alpha=0.8, edgecolor='black', linewidth=0.5, zorder=4, vmin=0, vmax=1)
+    
+    # Add colorbar
+    cbar = plt.colorbar(scatter, ax=ax, fraction=0.046, pad=0.04)
+    cbar.set_label('Biogenic Ratio', rotation=270, labelpad=20)
     
     # Formatting the plot - set the view limits
     ax.set_xlim(2, 24)
@@ -116,12 +112,10 @@ def plot_europe():
     ax.set_ylabel("")
     ax.set_title("")
     
-    # Add legend
-    ax.scatter([], [], marker='D', s=100, color='crimson', edgecolor='black', linewidth=1, label='Hubs')
-    ax.scatter([], [], marker='D', s=100, color='maroon', edgecolor='black', linewidth=1, label='Storage')
-    ax.scatter([], [], s=200, color='deepskyblue', alpha=0.8, edgecolor='black', linewidth=0.5, label='Selected plants')
-    ax.scatter([], [], s=200, color='grey', alpha=0.4, edgecolor='black', linewidth=0.5, label='Other plants')
-    ax.legend(loc='upper left')
+    # # Add legend
+    # ax.scatter([], [], marker='D', s=100, color='crimson', edgecolor='black', linewidth=1, label='Storage')
+    # ax.scatter([], [], s=200, color='grey', alpha=0.8, edgecolor='black', linewidth=0.5, label='Plants (biogenic ratio)')
+    # ax.legend(loc='upper left')
     
     # Save the figure at 600 DPI
     fig.savefig('map.png', dpi=600, bbox_inches='tight')

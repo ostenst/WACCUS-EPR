@@ -7,7 +7,7 @@ experiments = pd.read_csv('results/experiments_ccu.csv')
 outcomes_df = pd.read_csv('results/outcomes_ccu.csv')
 print("Number of scenarios originally:", len(experiments))
 
-celc_filter = (experiments['celc'] > 50) & (experiments['celc'] <= 70) # Based on SEA long term scenarios
+celc_filter = (experiments['celc'] > 30) & (experiments['celc'] <= 50) # Based on SEA long term scenarios
 experiments = experiments[celc_filter]
 outcomes_df = outcomes_df[celc_filter]
 print("Number of scenarios remaining:", len(experiments))
