@@ -142,7 +142,7 @@ model.outcomes = [
 ]
 
 ema_logging.log_to_stderr(ema_logging.INFO)
-n_scenarios = 40
+n_scenarios = 50
 n_policies = 0
 
 # If Sobol sampling:
@@ -173,17 +173,82 @@ sobol_stats = pd.DataFrame(sobol_stats, index=problem["names"])
 sobol_stats.to_csv("results/sobol_stats_ccs.csv")
 sobol_stats_sorted = sobol_stats.sort_values(by="ST", ascending=False)  # Ascending for better readability
 
+# Create parameter label dictionary (edit the values to readable labels)
+parameter_labels = {
+    "CAPEXref_H2": "CAPEXref_H2",
+    "CAPEXref_HP": "CAPEXref_HP",
+    "CAPEXref_capture": "CAPEXref_capture",
+    "CAPEXref_loading": "CAPEXref_loading",
+    "CAPEXref_synthesis": "CAPEXref_synthesis",
+    "CAPEXref_train": "CAPEXref_train",
+    "CEPCI": "CEPCI",
+    "COP": "COP",
+    "CRC": "CDR price [EUR/tCO2]",
+    "Ccontent": "Carbon content [kgC/kgfuel]",
+    "ETS": "ETS price [EUR/tCO2]",
+    "FLH": "FLH",
+    "LHVf": "LHV [MJ/kgfuel]",
+    "LHVmethanol": "LHVmethanol",
+    "OPEXfix": "OPEXfix",
+    "camine": "camine",
+    "capture_rate": "capture_rate",
+    "carbon_change": "carbon_change",
+    "celc": "Electricity price",
+    "cfraction": "Carbon content [kgC/kgplastic]",
+    "cheat": "cheat",
+    "circulated": "circulated",
+    "dr": "dr",
+    "gothenburg": "gothenburg",
+    "heat_optimism": "heat_optimism",
+    "k": "k",
+    "mKN39": "mKN39",
+    "malmo": "malmo",
+    "mbag": "mbag",
+    "mgranulates": "mgranulates",
+    "n_electrolyzer": "n_electrolyzer",
+    "n_is": "n_is",
+    "n_synthesis": "n_synthesis",
+    "pKN39": "pKN39",
+    "p_capture": "p_capture",
+    "p_condition": "p_condition",
+    "pbag": "pbag",
+    "pgranulates": "Price granulates [EUR/tplastic]",
+    "pmethanol": "pmethanol",
+    "q_distill": "q_distill",
+    "q_electrolyzer": "q_electrolyzer",
+    "q_reb": "q_reb",
+    "q_synthesis": "q_synthesis",
+    "recyclable": "recyclable",
+    "ship_uncertain": "ship_uncertain",
+    "stockholm": "stockholm",
+    "storage": "storage",
+    "t": "t",
+    "tax": "EPR fee [EUR/tCO2]",
+    "train_uncertain": "train_uncertain",
+    "truck_uncertain": "truck_uncertain",
+}
+
+# Map parameter names to readable labels (use original name if not in dictionary)
+readable_labels = [parameter_labels.get(param, param) for param in sobol_stats_sorted.index]
+
+# color = "#F8765C" # orange
+color = "#A5317E" # pink
+# color = "#241253" # purple
+
 # Create horizontal bar plot
 plt.figure(figsize=(8, 10))  # Adjust figure size for better layout
 sns.barplot(
-    y=sobol_stats_sorted.index,  # Parameters on y-axis
+    y=readable_labels,  # Readable labels on y-axis
     x=sobol_stats_sorted["ST"],  # Sobol indices on x-axis
     xerr=sobol_stats_sorted["ST_conf"],  # Confidence intervals as error bars
     capsize=0.2,
-    color="crimson"
+    color=color
 )
-plt.ylabel("Parameter")
-plt.xlabel("Total Sobol Index (ST)")
-plt.title("Total-Order Sobol Indices with Confidence Intervals")
+plt.ylabel("Parameter", fontsize=14)
+plt.xlabel("Total Sobol Index (ST)", fontsize=14)
+plt.title("Total-Order Sobol Indices with Confidence Intervals", fontsize=16)
+plt.xlim(0, 1.2)
 plt.grid(axis="x", linestyle="--", alpha=0.7)
+
+plt.savefig("results/fig5_sobol_ccs.png", dpi=300, bbox_inches="tight")
 plt.show()
