@@ -7,7 +7,7 @@ import matplotlib.cm as cm
 df = pd.read_csv('Data-package/Data-package/EU_emissions.csv')
 
 # Extract LULUCF emissions data
-lulucf_data = df[df.iloc[:, 0] == 'LULUCF emissions'].iloc[0, 1:].values.astype(float)
+lulucf_data = df[df.iloc[:, 0] == 'LULUCF e-missions'].iloc[0, 1:].values.astype(float)
 lulucf_years = df.columns[1:].astype(int).values
 
 # Create extended year range (2005-2050)
@@ -29,6 +29,11 @@ plt.figure(figsize=(10, 6))
 plt.stackplot(years_full, lulucf_interpolated, 
               labels=['LULUCF Emissions'], 
               colors=[cm.magma(0.2)], alpha=0.7)
+
+# Add annotations for each year
+for i, (year, value) in enumerate(zip(years_full, lulucf_interpolated)):
+    plt.text(year, value, f'{value:.0f}', fontsize=6, ha='center', va='bottom')
+
 plt.xlabel('Year', fontsize=15)
 plt.ylabel('LULUCF Emissions (Mt CO₂)', fontsize=15)
 plt.title('LULUCF Emissions vs Year (Stackplot)', fontsize=15)
@@ -46,6 +51,10 @@ plt.stackplot(years_full, ets_interpolated,
               labels=['EU ETS Emissions'], 
               colors=[cm.magma(0.6)], alpha=0.7)
 
+# Add annotations for each year
+for i, (year, value) in enumerate(zip(years_full, ets_interpolated)):
+    plt.text(year, value, f'{value:.0f}', fontsize=6, ha='center', va='bottom')
+
 plt.xlabel('Year', fontsize=15)
 plt.ylabel('EU ETS Emissions (Mt CO₂)', fontsize=15)
 plt.title('EU ETS Emissions vs Year (Stackplot)', fontsize=15)
@@ -62,6 +71,11 @@ plt.figure(figsize=(10, 6))
 plt.stackplot(years_full, effort_interpolated,
               labels=['Effort Sharing Emissions'], 
               colors=[cm.magma(0.8)], alpha=0.7)
+
+# Add annotations for each year
+for i, (year, value) in enumerate(zip(years_full, effort_interpolated)):
+    plt.text(year, value, f'{value:.0f}', fontsize=6, ha='center', va='bottom')
+
 plt.xlabel('Year', fontsize=15)
 plt.ylabel('Effort Sharing Emissions (Mt CO₂)', fontsize=15)
 plt.title('Effort Sharing Emissions vs Year (Stackplot)', fontsize=15)
@@ -80,7 +94,7 @@ max_effort_emissions = np.max(effort_data_clean)
 max_year_idx = np.argmax(effort_data_clean)
 max_year = effort_years_clean[max_year_idx]
 
-print(f'Maximum Effort Sharing Regulation (ESR) emissions: {max_effort_emissions:.2f} Mt CO₂')
+print(f'Maximum Effort Sharing Regulation (ESR) emissions: {max_effort_emissions:.2f} Mt CO2')
 print(f'Year of maximum emissions: {max_year}')
 
 # Now update the ETS plot with the offset
@@ -93,6 +107,10 @@ ets_offset = ets_interpolated + max_effort_emissions
 plt.stackplot(years_full, [max_effort_emissions * np.ones_like(years_full), ets_interpolated],
               labels=['Max ESR Level', 'EU ETS Emissions'], 
               colors=[cm.magma(0.3), cm.magma(0.6)], alpha=0.7)
+
+# Add annotations for each year (show total value at top of stack)
+for i, (year, value) in enumerate(zip(years_full, ets_offset)):
+    plt.text(year, value, f'{value:.0f}', fontsize=6, ha='center', va='bottom')
 
 plt.xlabel('Year', fontsize=15)
 plt.ylabel('EU ETS Emissions (Mt CO₂)', fontsize=15)

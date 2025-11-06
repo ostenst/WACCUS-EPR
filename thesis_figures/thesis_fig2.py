@@ -18,7 +18,7 @@ print(f"Number of plants: {len(pulp_plants)}")
 print()
 
 # Load Europe shapefile and convert to WGS84
-europe = gpd.read_file("data/shapefiles/Europe/Europe_merged.shp").to_crs("EPSG:4326")
+europe = gpd.read_file("../data/shapefiles/Europe/Europe_merged.shp").to_crs("EPSG:4326")
 
 # Create the plot
 fig, ax = plt.subplots(figsize=(10, 8))
@@ -55,7 +55,7 @@ ax.set_yticks([])
 top_3_plants = pulp_plants.nlargest(3, 'Total')
 for _, plant in top_3_plants.iterrows():
     ax.annotate(
-        f"{plant['Total']:.0f} ktCO2",
+        f"{round(plant['Total'], -1):.0f} ktCO2",
         (plant['Longitude'], plant['Latitude']),
         xytext=(0, 0), textcoords='offset points',
         fontsize=8, ha='center', va='center'

@@ -2,6 +2,8 @@ import CoolProp.CoolProp as CP
 import numpy as np
 import matplotlib.pyplot as plt
 
+color = '#CF73A4'
+
 def get_thermo_properties():
 
 
@@ -524,25 +526,25 @@ def plot_compression_on_phase_diagram(P_list, T_actual_intermediate_list, thermo
         
         # Plot compression phase
         plt.plot(T_celsius[:n_compression_points], P_compression, 
-                color='crimson', 
+                color=color, 
                 linewidth=2, 
                 zorder=4)
         
         # Plot cooling phase
         plt.plot(T_celsius[n_compression_points:], P_cooling, 
-                color='crimson', 
+                color=color, 
                 linewidth=2, 
                 linestyle='-',
                 zorder=4)
                 
     # Plot a single line from (312.5 K, P_cooling_last) to (245 K, P_cooling_last) using the last stage's cooling pressure
     plt.plot([312.5-273.15, 245-5-273.15], [P_cooling, P_cooling], #5K buffer, and 245K is from Deng @15 bar delivery pressure
-             color='crimson',
+             color=color,
              linewidth=2,
              linestyle='-',
              label='39.4°C to -33.2°C')
 
-    plt.scatter([373.15-273.15], [200], color='crimson', s=100, marker='*', label='100°C, 200 bar', zorder=6)
+    plt.scatter([373.15-273.15], [200], color=color, s=100, marker='*', label='100°C, 200 bar', zorder=6)
     
     # Simple curved line from (245K, P_cooling) to (373.15K, 200 bar)
     T_start = 245-5  # K -buffer
@@ -563,7 +565,7 @@ def plot_compression_on_phase_diagram(P_list, T_actual_intermediate_list, thermo
     
     # Plot the compression line
     plt.plot(T_curve-273.15, P_curve, 
-             color='crimson', 
+             color=color, 
              linewidth=2, 
              linestyle='--',
              label='Compression: -33.2°C to 100°C', zorder=4)
