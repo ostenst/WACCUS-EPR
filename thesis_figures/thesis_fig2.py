@@ -6,6 +6,22 @@ from matplotlib.patches import Patch
 # Load the data
 df = pd.read_csv("thesis_fig2.csv", encoding='latin-1')
 
+# Add another plant to df:
+new_plant = pd.DataFrame({
+    'Company/Plant name': ['EON Malmo'],
+    'Industry/Plant type': ['CHP, Biomass'],
+    'Latitude': [55.63],
+    'Longitude': [13.025],
+    'Biogenic': [300],
+    'Fossil': [0],
+    'Total': [300],
+    'Fraction': [0],
+    'Green': [1],
+    'Integration': ['NA'],
+})
+
+df = pd.concat([df, new_plant], ignore_index=True)
+
 # Filter for pulp and paper plants
 pulp_plants = df[df['Industry/Plant type'] == 'Pulp and paper']
 
@@ -114,6 +130,49 @@ ax2.set_title('All Other Plants in Sweden - CO2 Emissions (bubble size = Total k
 # Save the second figure
 fig2.savefig('other_plants_map.png', dpi=600, bbox_inches='tight')
 
+# Create third map for non-pulp plants and standalone pulp plants
+print("\n" + "="*50)
+print("Creating third map with non-pulp plants and standalone pulp plants...")
+print(f"Number of non-pulp plants: {len(non_pulp_plants)}")
+print(f"Number of standalone pulp plants: {len(standalone_plants)}")
+print()
+
+# Create the third figure
+fig3, ax3 = plt.subplots(figsize=(10, 8))
+
+# Plot the landmass
+europe.plot(ax=ax3, edgecolor="black", facecolor="whitesmoke")
+
+# Plot non-pulp plants as solid circles
+ax3.scatter(non_pulp_plants['Longitude'], non_pulp_plants['Latitude'], 
+           s=non_pulp_plants['Total'], alpha=0.7, 
+           c=non_pulp_plants['Green'], cmap='magma', vmin=0, vmax=1,
+           edgecolors='black', linewidth=0.5)
+
+# Plot standalone pulp plants as solid circles
+scatter3 = ax3.scatter(standalone_plants['Longitude'], standalone_plants['Latitude'], 
+                      s=standalone_plants['Total'], alpha=0.7, 
+                      c=standalone_plants['Green'], cmap='magma', vmin=0, vmax=1,
+                      edgecolors='black', linewidth=0.5)
+
+# Set map bounds to focus on Sweden
+ax3.set_xlim(1.4, 29.5)
+ax3.set_ylim(54.34, 70)
+ax3.set_aspect(1.90)
+
+# Remove ticks
+ax3.set_xticks([])
+ax3.set_yticks([])
+
+# Add colorbar
+cbar3 = plt.colorbar(scatter3, ax=ax3)
+cbar3.set_label('Green Fraction (1=100% biogenic, 0=100% fossil)')
+
+ax3.set_title('Non-Pulp Plants + Standalone Pulp Plants in Sweden - CO2 Emissions (bubble size = Total ktCO2/yr)')
+
+# Save the third figure
+fig3.savefig('combined_plants_map.png', dpi=600, bbox_inches='tight')
+
 
 # # Create third figure with both maps side by side
 # print("\n" + "="*50)
@@ -162,3 +221,47 @@ fig2.savefig('other_plants_map.png', dpi=600, bbox_inches='tight')
 
 # plt.subplots_adjust(wspace=0.1)
 plt.show()
+
+# condition = True
+# ETS=90
+# t=1
+# revenues =0
+# latin_hypercube = True
+# model= 1
+# technology = "amines"
+# regulated_biomass = True
+# carbon_dioxide = 100
+# capture_rate = 0.90
+# def lhs_sample(model, parameter, n):
+#     if model == 1:
+#         return np.random.uniform(0, 1, n)
+#     elif model == 2:
+#         return np.random.uniform(0, 1, n)
+#     elif model == 3:
+#         return np.random.uniform(0, 1, n)
+# def get_energy(carbon_dioxide, uncertainties):
+#     return carbon_dioxide * uncertainties["energy_balance"]
+# def annualize_capex(technology, uncertainties):
+#     return uncertainties["capital_cost"]
+
+# if condition == True:
+#     revenues = ETS(t)
+#     print(f"Succesful if X")
+# if revenues > 100:
+#     ETS.append(condition["ETS"])
+
+# if latin_hypercube == True:
+#     uncertainties = lhs_sample(model, "uncertainties", 10**6)
+#     levers = lhs_sample(model, "levers", 10**6)
+#     parameters = {"uncertainties": uncertainties,"levers": levers,}
+# for year in range(2025, 2050):
+#     if technology == "amines":
+#         energy_balance = get_energy(carbon_dioxide, parameters["uncertainties"])
+#         capital_cost = annualize_capex("amines", parameters["uncertainties"])
+#     if levers["policy"] == "ETS-integrate":
+#         revenues += ETS(year) * carbon_dioxide
+#         if regulated_biomass == True:
+#             revenues = 0
+#     if levers["policy"] == "ETS-standalone":
+#         revenues += ETS(year) * carbon_dioxide
+# print(f"BECCS capacity: {carbon_dioxide * capture_rate}")
