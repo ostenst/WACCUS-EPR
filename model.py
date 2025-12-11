@@ -572,6 +572,7 @@ def WACCUS_EPR(
     # constants
     question="granulates",
     CCUS="CCS", 
+    agency = False,
     plants_df=None, 
     shipping_df=None,
     truck_df=None,          
@@ -729,6 +730,9 @@ def WACCUS_EPR(
     mass_CO2 = mass_taxed * 3.66        # [tCO2/yr]
     mass_taxed = mass_taxed / cfraction # [tpl/yr]
     fund = mass_CO2 * tax * 10**-6      # [MEUR/yr]
+
+    if agency:
+        fund = fund/2 # Share half the budget to NV agency rather than EM
 
     # Create CCUS bids
     bids = []
@@ -960,6 +964,7 @@ if __name__ == "__main__":
     output = WACCUS_EPR(
         question="granulates",
         CCUS="CCS", 
+        agency=False,
         plants_df=plants_df, 
         shipping_df=shipping_df,
         truck_df=truck_df,

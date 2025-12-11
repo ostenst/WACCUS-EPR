@@ -79,7 +79,7 @@ short_names = [list(carbon_map[cat].keys())[0] for cat in category_sums.index]
 # Map carbon content to colors using magma colormap
 colors = plt.cm.magma_r((np.array(carbon_values) - min(carbon_values)) / (max(carbon_values) - min(carbon_values)))
 
-fig, ax = plt.subplots(figsize=(14, 8))
+fig, ax = plt.subplots(figsize=(14, 6))
 bars = ax.bar(range(len(category_sums)), category_sums.values, color=colors)
 # ax.set_xlabel('Category', fontsize=12)
 ax.set_ylabel('Supplied plastic [tpl/yr]', fontsize=12)

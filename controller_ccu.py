@@ -107,6 +107,7 @@ model.levers = [
 model.constants = [
     Constant("question", research_question), # Pick between ["granulates", "products", "both"]
     Constant("CCUS", "CCU"),                 # Pick between ["CCS", "CCU"]
+    Constant("agency", False),      # [True, False]
     Constant("plants_df", plants_df),
     Constant("shipping_df", shipping_df),
     Constant("truck_df", truck_df),
