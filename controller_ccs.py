@@ -107,7 +107,7 @@ model.levers = [
 model.constants = [
     Constant("question", research_question), # ["granulates", "products", "both"]
     Constant("CCUS", "CCS"),            # ["CCS", "CCU"]
-    Constant("agency", False),      # [True, False]
+    Constant("agency", True),      # [True, False]
     Constant("plants_df", plants_df),
     Constant("shipping_df", shipping_df),
     Constant("truck_df", truck_df),
@@ -143,7 +143,7 @@ model.outcomes = [
 ]
 
 ema_logging.log_to_stderr(ema_logging.INFO)
-n_scenarios = 250
+n_scenarios = 50
 n_policies = 80
 
 # Regular LHS sampling:
