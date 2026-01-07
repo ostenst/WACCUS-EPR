@@ -58,7 +58,7 @@ for category in categories:
     elif category == 'Polymerer av vinylklorid eller av andra halogenerade olefiner i obearbetad form':
         carbon_map[category] = {'PVC': 0.396}
     else:
-        carbon_map[category] = {'Other': 0.752} # The global mean
+        carbon_map[category] = {'Mixed': 0.752} # The global mean
 
 # Print the carbon map
 print("\nCarbon content [%C] for the categories:")
@@ -79,13 +79,14 @@ short_names = [list(carbon_map[cat].keys())[0] for cat in category_sums.index]
 # Map carbon content to colors using magma colormap
 colors = plt.cm.magma_r((np.array(carbon_values) - min(carbon_values)) / (max(carbon_values) - min(carbon_values)))
 
-fig, ax = plt.subplots(figsize=(14, 6))
-bars = ax.bar(range(len(category_sums)), category_sums.values, color=colors)
+fig, ax = plt.subplots(figsize=(12, 6))
+bars = ax.bar(range(len(category_sums)), category_sums.values/1000, color=colors)
 # ax.set_xlabel('Category', fontsize=12)
-ax.set_ylabel('Supplied plastic [tpl/yr]', fontsize=12)
+ax.set_ylabel('Supplied plastic [ktpl/yr]', fontsize=14)
 ax.set_title('Plastic flows per type (colored by carbon content)', fontsize=14)
 ax.set_xticks(range(len(category_sums)))
-ax.set_xticklabels(short_names, rotation=45, ha='right')
+ax.set_xticklabels(short_names, rotation=90, ha='center', fontsize=14)
+ax.tick_params(axis='y', labelsize=14)
 
 # Annotate each bar with carbon content
 for i, (bar, carbon) in enumerate(zip(bars, carbon_values)):
@@ -98,7 +99,9 @@ for i, (bar, carbon) in enumerate(zip(bars, carbon_values)):
 
 sm = plt.cm.ScalarMappable(cmap='magma_r', norm=plt.Normalize(vmin=min(carbon_values), vmax=max(carbon_values)))
 sm.set_array([])
-plt.colorbar(sm, ax=ax, label='Carbon content [tC/tpl]')
+cbar = plt.colorbar(sm, ax=ax)
+cbar.set_label('Carbon content [tC/tpl]', fontsize=14)
+cbar.ax.tick_params(labelsize=14)
 plt.tight_layout()
 
 # Mean carbon content is the weighted average of the carbon content of the categories
@@ -106,5 +109,7 @@ mean_carbon_content = np.sum(category_sums.values * carbon_values) / np.sum(cate
 mean_emission_factor = mean_carbon_content * 3.66 # [kgCO2/kgpl]
 print(f"\nMean carbon content: {mean_carbon_content:.2%} [kgC/kgpl]")
 print(f"Mean emission factor: {mean_emission_factor:.2f} [kgCO2/kgpl]")
+
+plt.savefig('results/fig3_plastics.png', dpi=300, bbox_inches='tight')
 
 plt.show()
