@@ -76,17 +76,23 @@ for _, plant in plants_df.iterrows():
     m_bio_s = round(m_bio / FLH / 3600 /m_total_s, 2)      # kg/s
     m_ash_s = round(m_ash / FLH / 3600 /m_total_s, 2)      # kg/s
     m_water_s = round(m_water / FLH / 3600 /m_total_s, 2)  # kg/s
+    Wpl = LHV_pl*m_pl *10**-6 # TJ/a
+    Wbio = LHV_bio*m_bio *10**-6 # TJ/a
+    Wbio_wet = (LHV_bio*m_bio - rw*m_water) *10**-6 # TJ/a
 
     # Print as a table row
     print(
         f"{plant['Name']:20} | "
         f"Total: {m_total_s:>6} | "
-        f"Plastic: {m_pl_s:>6} | "
-        f"Biomass: {m_bio_s:>6} | "
+        f"Pl: {m_pl_s:>6} | "
+        f"Bio: {m_bio_s:>6} | "
         f"Ash: {m_ash_s:>6} | "
-        f"Water: {m_water_s:>6} | "
+        f"H2O: {m_water_s:>6} | "
         f"FLH: {round(FLH):>5} | "
-        f"LHV: {round(LHV_tot, 2):>5} MJ/kg"
+        f"LHV: {round(LHV_tot, 2):>5} | "
+        f"Wp: {round(Wpl, 2):>5} | "
+        f"Wbdry: {round(Wbio, 2):>5} | "
+        f"Wbwet: {round(Wbio_wet, 2):>5} | "
     )
 
     # # Now we miss 3 unknowns but have 3 equations:
