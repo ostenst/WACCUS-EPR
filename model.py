@@ -110,6 +110,16 @@ def shipping_adjustment(df, scaling=0.67, debug=False):
     
     return shipping_df
 
+def levelize_kEUR(CAPEX, annual_CO2, x):
+    """
+    Levelize CAPEX in [kEUR] to [EUR/tCO2].
+
+    """
+    CRF = x["dr"] * (1 + x["dr"])**x["t"] / ((1 + x["dr"])**x["t"] - 1)
+    CAPEX_annual = CAPEX * CRF  # [kEUR/yr]
+    CAPEX_lev = CAPEX_annual / annual_CO2  # [EUR/tCO2]
+    return CAPEX_lev
+
 def plan_CCS(plant, c, x, l):
 
     # Burn fuel and capture/condition CO2
@@ -138,17 +148,82 @@ def plan_CCS(plant, c, x, l):
     Whp = Qdiff / x["COP"]             # [MW] may exceed P (grid purchase)
     Qdh = Qdh + Qhex + Whp*x["COP"]    # restores Qdh to Qdh_old
     P -= Whp                           # negative P means grid power needed
-    Ppenalty = (P_old - P) * FLH        # [MWh/yr] if negative P, the Ppenalty is inflated
-    Qpenalty = (Qdh_old - Qdh) * FLH    # [MWh/yr]
+    Ppenalty = (P_old - P) * FLH       # [MWh/yr] if negative P, the Ppenalty is inflated
+    Qpenalty = (Qdh_old - Qdh) * FLH   # [MWh/yr]
 
     # Estimate CAPEX and on-site OPEX
+    CAPEX_capture = c["CAPEXref_capture"] * (annual_CO2/400) ** x["k"] * (x["CEPCI_scenario"]/c["CEPCI_reference"]) # [kEUR]
+    CAPEX_capture_lev = levelize_kEUR(CAPEX_capture, annual_CO2, x) # [EUR/tCO2]
+    CAPEX_HP = x["CAPEXref_HP"] * Whp*x["COP"] * (x["CEPCI_scenario"]/c["CEPCI_reference"]) # [kEUR] neglect HEX costs
+    CAPEX_HP_lev = levelize_kEUR(CAPEX_HP, annual_CO2, x)            
 
-    strike_price = 0
-    FCCS = 0
-    BECCS = 0
-    Ppenalty = 0
-    Qpenalty = 0
-    cost_details = 0
+    OPEX_fix = (CAPEX_capture * x["OPEXfix"]) / annual_CO2                           # [EUR/tCO2] 
+    OPEX_makeup = x["camine"] * c['SEK_to_EUR']                                      # [EUR/tCO2]
+    OPEX_energy = (Ppenalty*x["celc"] + Qpenalty*x["celc"]*x["cheat"]) / (annual_CO2 * 1000)  # [EUR/tCO2]
+    OPEX = OPEX_fix + OPEX_makeup + OPEX_energy   
+
+    # Calculate transport and storage costs
+    annual_CO2_t = annual_CO2 * 1000  # [tCO2/yr] for truck interpolation
+    CEPCI_ratio = x["CEPCI_scenario"] / c["CEPCI_reference"]
+    transport_cost = 0  # [EUR/tCO2]
+
+    def _valid(val):
+        return pd.notna(val) and str(val) != "None"
+
+    def _loading_lev():
+        CAPEX = x["CAPEXref_loading"] * c["SEK_to_EUR"] / 1000 * (annual_CO2 / 150) ** x["k"] * CEPCI_ratio  # [kEUR]
+        return levelize_kEUR(CAPEX, annual_CO2, x)
+
+    # Truck leg (road transport to loading terminal)
+    if _valid(plant.get('Truck_distance')):
+        dist = float(plant['Truck_distance'])
+        transport_cost += _loading_lev()
+        pts = np.column_stack((c["truck_costs"]['mass'].values, c["truck_costs"]['km'].values))
+        costs = c["truck_costs"]['EUR/ton'].values
+        result = griddata(pts, costs, (annual_CO2_t, dist), method='linear')
+        if result is None or np.isnan(result):
+            result = griddata(pts, costs, (annual_CO2_t, dist), method='nearest')
+        transport_cost += float(result)
+
+    # Pipeline leg
+    if _valid(plant.get('Pipeline_distance')):
+        dist = float(plant['Pipeline_distance'])
+        mCO2_s = annual_CO2_t * 1000 / FLH / 3600    # [kgCO2/s]
+        VCO2 = (mCO2_s / 44) * 22.4                   # [m3/s] ideal gas @ STP
+        D_pipe = 2 * ((VCO2 / 16) / np.pi) ** 0.5     # [m] @ 16 m/s flow velocity
+        CAPEX = np.pi * D_pipe * dist * 1.2 * 568 * CEPCI_ratio / 1000  # [kEUR]
+        transport_cost += levelize_kEUR(CAPEX, annual_CO2, x)
+
+    # Rail leg
+    if _valid(plant.get('Rail_distance')):
+        dist = float(plant['Rail_distance'])
+        transport_cost += _loading_lev()
+        cycle_time = (dist / 60 + 5) * 2              # [h] roundtrip @ 60 km/h + 5h unload
+        throughput = 15 * 60 / cycle_time              # [tCO2/h] @15 wagons, 60 t/wagon
+        CAPEX_train = x["CAPEXref_train"] * CEPCI_ratio / 1000  # [kEUR]
+        OPEX_train = (x["OPEXfix"] * x["CAPEXref_train"] + 0.0269 * throughput * dist * 2 * 365) / annual_CO2_t  # [EUR/tCO2]
+        transport_cost += levelize_kEUR(CAPEX_train, annual_CO2, x) + OPEX_train
+
+    # Shipping leg (to Northern Lights / Oygarden)
+    if _valid(plant.get('Oygarden_distance')):
+        dist = float(plant['Oygarden_distance'])
+        df_ship = c["shipping_costs"].sort_values('distance')
+        transport_cost += float(np.interp(dist, df_ship['distance'].values, df_ship['optimist_0.5Mt'].values))
+
+    # Construct final cost breakdown
+    CAC = CAPEX_capture_lev + CAPEX_HP_lev + OPEX + transport_cost  # [EUR/tCO2]
+    strike_price = CAC * (1 + c["profit"])                          # [EUR/tCO2]
+    bio_fraction = plant["Biogenic"] / plant["Total"]
+    BECCS = annual_CO2 * 1000 * bio_fraction * c["capture_rate"]    # [tCO2/yr] negative emissions
+    FCCS = annual_CO2 * 1000 * (1 - bio_fraction) * c["capture_rate"]  # [tCO2/yr] fossil CCS
+
+    cost_details = {
+        "CAPEX_capture": CAPEX_capture_lev,
+        "CAPEX_HP": CAPEX_HP_lev,
+        "OPEX": OPEX,
+        "transport": transport_cost,
+        "CAC": CAC,
+    }
     return strike_price, FCCS, BECCS, Ppenalty, Qpenalty, cost_details
 
 def WACCUS_EPR(
@@ -162,11 +237,14 @@ def WACCUS_EPR(
     SEK_to_EUR=0.091,
     profit=0.10,
     plot_results=False,
+
     CPI2015=314.21, # [SCB]
     CPI2025=417.96, # [SCB]
+    CAPEXref_capture = 3550*0.09*1000,  # [MNOK]->[kEUR] @400 ktCO2/yr [Gassnova, Demonstrasjon av Fullskala CO2-Håndtering - Rapport for Avsluttet Forprosjekt]
 
     capture_rate = 0.90,    # [-] 
     q_hex = 0.64,           # [MWth/MWreb] [Beiron, 2022] assumed heat exhange from capture plant
+    CEPCI_reference = 600,  # [-] [University of Manchester, 2025] applies to reference CAPEX values
 
     # [X] Uncertainties
     baseline_granulates = 1258597, # [t/a] [IVL]
@@ -184,6 +262,19 @@ def WACCUS_EPR(
     p_capture = 0.1,        # [MWh/tCO2] [Beiron, 2022]
     p_condition = 0.37,     # [MJ/kgCO2] [Kumar, 2023]
     COP = 3,                # [MWth/MWel]
+
+    k = 0.67,                           # [-] [Stenström, 2025] assumed economy-of-scale factor
+    CEPCI_scenario = 900,               # [-] [University of Manchester, 2025] applies to reference CAPEX values
+    dr = 0.075,                         # [-]
+    t = 25,                             # [yr]
+    CAPEXref_HP = 860,                  # [kEUR/MWth] [Bergander & Hellander, 2025]
+    CAPEXref_loading = 63000000,        # [SEK*] @150 ktCO2/yr excluding railway track [Koldioxid på tåg, 2024]
+    CAPEXref_train = 8610000,           # [EUR*] an oversized train @15 wagons, cost = 4.98 *10**6 + 242*15 *10**3 [MSc Gunnarsson, 2025]
+    OPEXfix = 0.04,                     # [-] % of base CAPEX, calculated from [Ramboll-Malmö, 2023]
+
+    camine = 44,            # [SEK/tCO2] [Ramboll-Malmö, 2023]
+    celc = 60,              # [EUR/MWh]
+    cheat = 0.75,           # [% of elc]
     
     # [L] Levers
     EPR_products = True,
@@ -198,14 +289,30 @@ def WACCUS_EPR(
         "thermo_props": thermo_props,
         "SEK_to_EUR": SEK_to_EUR,
         "profit": profit,
+
+        "CAPEXref_capture": CAPEXref_capture,
         "capture_rate": capture_rate,
         "q_hex": q_hex,
+        "CEPCI_reference": CEPCI_reference,
     }
     x = {
         "q_reb": q_reb,
         "p_capture": p_capture,
         "p_condition": p_condition,
         "COP": COP,
+        
+        "k": k,
+        "CEPCI_scenario": CEPCI_scenario,
+        "dr": dr,
+        "t": t,
+        "CAPEXref_HP": CAPEXref_HP,
+        "CAPEXref_loading": CAPEXref_loading,
+        "CAPEXref_train": CAPEXref_train,
+        "OPEXfix": OPEXfix,
+
+        "camine": camine,
+        "celc": celc,
+        "cheat": cheat,
     }
     l = {}
 
