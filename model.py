@@ -164,6 +164,11 @@ def plan_CCS(plant, c, x, l):
     OPEX = OPEX_fix + OPEX_makeup + OPEX_energy   
 
     # Calculate transport and storage costs based on (Ouvrey et al., 2024):
+    loading_cost = 0
+    truck_cost = 0
+    pipeline_cost = 0
+    rail_cost = 0
+    shipping_cost = 0
     transport_cost = 0  # [EUR/tCO2]
     def _mode(val):
         return pd.notna(val) and str(val) != "None"
@@ -174,24 +179,22 @@ def plan_CCS(plant, c, x, l):
 
     # Truck leg (road transport to loading terminal)
     if _mode(plant.get('Truck_distance')):
-        transport_cost += _loading_cost()
+        loading_cost = _loading_cost()
         distance = float(plant['Truck_distance']) # [km]
         a1, a2 = 0.15, 5.58 
         UC = a1 + a2 / distance # [€/(t*km)]
-        cost = UC * distance # [€/tCO2]
-        transport_cost += cost
+        truck_cost = UC * distance # [€/tCO2]
 
     # Pipeline leg
     if _mode(plant.get('Pipeline_distance')):
         distance = float(plant['Pipeline_distance'])/1000 # [km]
         a1, a2, a3, a4 = 0.02, 260, 0.07, -0.61
         UC = a1 + a2 * (distance / 1)**a3 * (annual_CO2*1000*c["capture_rate"] / 1)**a4 # [€/(t*km)]
-        cost = UC * distance # [€/tCO2]
-        transport_cost += cost
+        pipeline_cost = UC * distance # [€/tCO2]
 
     # Rail leg
     if _mode(plant.get('Rail_distance')):
-        transport_cost += _loading_cost()
+        loading_cost += _loading_cost()
         distance = float(plant['Rail_distance'])       # [km]
         cycle_time = (distance / 60 + 5) * 2           # [h] roundtrip (*2) @ 60 km/h + 5h unload
         capacity = 15 * 60 / cycle_time                # [tCO2/h] @15 wagons, 60 t/wagon
@@ -201,33 +204,58 @@ def plan_CCS(plant, c, x, l):
         OPEX_train = x["OPEXfix"]*CAPEX_train + 0.0269*(capacity*(distance*2*365)) # [EUR/yr] 1 roundtrip per day is more than enough!
         OPEX_train = OPEX_train / (annual_CO2*1000)                                # [EUR/tCO2]
 
-        transport_cost += CAPEXlev_train + OPEX_train
-    print(transport_cost)
+        rail_cost = CAPEXlev_train + OPEX_train
 
-    # # Shipping leg (to Northern Lights / Oygarden)
-    # if _mode(plant.get('Oygarden_distance')):
-    #     dist = float(plant['Oygarden_distance'])
-    #     df_ship = c["shipping_costs"].sort_values('distance')
-    #     transport_cost += float(np.interp(dist, df_ship['distance'].values, df_ship['optimist_0.5Mt'].values))
+    # Shipping leg (to Northern Lights / Oygarden)
+    if _mode(plant.get('Oygarden_distance')):
+        if x["storage"] == "oygarden":
+            distance = float(plant['Oygarden_distance'])
+        elif x["storage"] == "kalundborg":
+            distance = float(plant['Kalundborg_distance'])
+        df_ship = c["shipping_costs"].sort_values('distance')
+        shipping_cost = float(np.interp(distance, df_ship['distance'].values, df_ship[x["shipping_case"]].values))
 
-    # # Construct final cost breakdown
-    # CAC = CAPEX_capture_lev + CAPEX_HP_lev + OPEX + transport_cost  # [EUR/tCO2]
-    # strike_price = CAC * (1 + c["profit"])                          # [EUR/tCO2]
-    # bio_fraction = plant["Biogenic"] / plant["Total"]
-    # BECCS = annual_CO2 * 1000 * bio_fraction * c["capture_rate"]    # [tCO2/yr] negative emissions
-    # FCCS = annual_CO2 * 1000 * (1 - bio_fraction) * c["capture_rate"]  # [tCO2/yr] fossil CCS
+    transport_cost = loading_cost + truck_cost + pipeline_cost + rail_cost + shipping_cost
+    
+    # Construct final cost breakdown
+    CAC = CAPEX_capture_lev + CAPEX_HP_lev + OPEX + transport_cost + x["storage_cost"]  # [EUR/tCO2]
+    print("CAPEX_capture_lev=", CAPEX_capture_lev)
+    print("CAPEX_HP_lev=", CAPEX_HP_lev)
+    print("OPEX=", OPEX)
+    print("transport_cost=", transport_cost)
+    print("storage_cost=", x["storage_cost"])
+    print("CAC=", CAC)
+    print(" ")
 
-    # cost_details = {
-    #     "CAPEX_capture": CAPEX_capture_lev,
-    #     "CAPEX_HP": CAPEX_HP_lev,
-    #     "OPEX": OPEX,
-    #     "transport": transport_cost,
-    #     "CAC": CAC,
-    # }
-    strike_price = 0
-    FCCS = 0
-    BECCS = 0
-    cost_details = None
+    fossil = plant["Fossil"] / plant["Total"]                       # [tfossil/t] 
+    biogenic = 1 - fossil                                           # [tbiogenic/t] 
+    fossil -= x["carbon_change"]
+    biogenic += x["carbon_change"]
+    FCCS = annual_CO2 * fossil                                # [ktCO2/yr]
+    BECCS = annual_CO2 * biogenic                             # [ktCO2/yr]
+    if x["CRC"] < x["ETS"]:
+        x["CRC"] = x["ETS"] # In such cases (~50%), CRCs are assumed integrated into the ETS
+    strike_price = CAC - biogenic * x["CRC"]                        # [EUR/tCO2] relative to a fossil ETS reference price
+    strike_price = strike_price * (1 + c["profit"])
+    print("strike_price=", strike_price)
+    print("FCCS=", FCCS)
+    print("BECCS=", BECCS)
+    print(" ")
+
+    cost_details = {
+        "CAPEX_capture_lev": CAPEX_capture_lev,
+        "CAPEX_HP_lev": CAPEX_HP_lev,
+        "OPEX_fix": OPEX_fix,
+        "OPEX_makeup": OPEX_makeup,
+        "OPEX_energy": OPEX_energy,
+        "loading_cost": loading_cost,
+        "truck_cost": truck_cost,
+        "pipeline_cost": pipeline_cost,
+        "rail_cost": rail_cost,
+        "shipping_cost": shipping_cost,
+        "transport_cost": transport_cost,
+        "storage_cost": x["storage_cost"],
+    }
     return strike_price, FCCS, BECCS, Ppenalty, Qpenalty, cost_details
 
 def WACCUS_EPR(
@@ -279,6 +307,14 @@ def WACCUS_EPR(
     camine = 44,            # [SEK/tCO2] [Ramboll-Malmö, 2023]
     celc = 60,              # [EUR/MWh]
     cheat = 0.75,           # [% of elc]
+
+    shipping_case = "pessimist_1Mt", # The main transport uncertainty! Dictates 1Mt, 2Mt, or 3Mt costs.
+    storage = "oygarden",   # ["oygarden", "kalundborg"]
+    storage_cost = 20, # [EUR/tCO2]
+
+    carbon_change = 0.10,   # [-] [-0.10,0.10] [Malder, 2023] fraction of biogenic carbon
+    CRC = 100,              # [EUR/tCO2]
+    ETS = 80,               # [EUR/tCO2] Use this report: The EU-ETS Price Through 2030 and Beyond: A closer look at drivers, models and assumptions (https://www.ecologic.eu/19034)
     
     # [L] Levers
     EPR_products = True,
@@ -317,6 +353,14 @@ def WACCUS_EPR(
         "camine": camine,
         "celc": celc,
         "cheat": cheat,
+
+        "shipping_case": shipping_case,
+        "storage": storage,
+        "storage_cost": storage_cost,
+
+        "carbon_change": carbon_change,
+        "CRC": CRC,
+        "ETS": ETS,
     }
     l = {}
 
@@ -334,6 +378,7 @@ def WACCUS_EPR(
     if EPR_design == "Mitigation":
         for _, plant in plants_df.iterrows():
             strike_price, FCCS, BECCS, Ppenalty, Qpenalty, cost_details = plan_CCS(plant, c, x, l)
+            print(cost_details)
 
     elif EPR_design == "Recovery":
         print("Recovery not implemented yet")
