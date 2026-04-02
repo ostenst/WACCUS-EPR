@@ -152,9 +152,10 @@ def plan_CCS(plant, c, x, l):
     Qpenalty = (Qdh_old - Qdh) * FLH   # [MWh/yr]
 
     # Estimate CAPEX and on-site OPEX
-    CAPEX_capture = c["CAPEXref_capture"] * (annual_CO2/400) ** x["k"] * (x["CEPCI_scenario"]/c["CEPCI_reference"]) # [kEUR]
+    CEPCI_adjustment = x["CEPCI_scenario"] / c["CEPCI_reference"]
+    CAPEX_capture = c["CAPEXref_capture"] * (annual_CO2/400) ** x["k"] * CEPCI_adjustment # [kEUR]
     CAPEX_capture_lev = levelize_kEUR(CAPEX_capture, annual_CO2, x) # [EUR/tCO2]
-    CAPEX_HP = x["CAPEXref_HP"] * Whp*x["COP"] * (x["CEPCI_scenario"]/c["CEPCI_reference"]) # [kEUR] neglect HEX costs
+    CAPEX_HP = x["CAPEXref_HP"] * Whp*x["COP"] * CEPCI_adjustment # [kEUR] neglect HEX costs
     CAPEX_HP_lev = levelize_kEUR(CAPEX_HP, annual_CO2, x)            
 
     OPEX_fix = (CAPEX_capture * x["OPEXfix"]) / annual_CO2                           # [EUR/tCO2] 
@@ -162,68 +163,71 @@ def plan_CCS(plant, c, x, l):
     OPEX_energy = (Ppenalty*x["celc"] + Qpenalty*x["celc"]*x["cheat"]) / (annual_CO2 * 1000)  # [EUR/tCO2]
     OPEX = OPEX_fix + OPEX_makeup + OPEX_energy   
 
-    # Calculate transport and storage costs
-    annual_CO2_t = annual_CO2 * 1000  # [tCO2/yr] for truck interpolation
-    CEPCI_ratio = x["CEPCI_scenario"] / c["CEPCI_reference"]
+    # Calculate transport and storage costs based on (Ouvrey et al., 2024):
     transport_cost = 0  # [EUR/tCO2]
-
-    def _valid(val):
+    def _mode(val):
         return pd.notna(val) and str(val) != "None"
 
-    def _loading_lev():
-        CAPEX = x["CAPEXref_loading"] * c["SEK_to_EUR"] / 1000 * (annual_CO2 / 150) ** x["k"] * CEPCI_ratio  # [kEUR]
+    def _loading_cost():
+        CAPEX = c["CAPEXref_loading"] * c["SEK_to_EUR"] / 1000 * (annual_CO2 / 150) ** x["k"] * CEPCI_adjustment  # [kEUR]
         return levelize_kEUR(CAPEX, annual_CO2, x)
 
     # Truck leg (road transport to loading terminal)
-    if _valid(plant.get('Truck_distance')):
-        dist = float(plant['Truck_distance'])
-        transport_cost += _loading_lev()
-        pts = np.column_stack((c["truck_costs"]['mass'].values, c["truck_costs"]['km'].values))
-        costs = c["truck_costs"]['EUR/ton'].values
-        result = griddata(pts, costs, (annual_CO2_t, dist), method='linear')
-        if result is None or np.isnan(result):
-            result = griddata(pts, costs, (annual_CO2_t, dist), method='nearest')
-        transport_cost += float(result)
+    if _mode(plant.get('Truck_distance')):
+        transport_cost += _loading_cost()
+        distance = float(plant['Truck_distance']) # [km]
+        a1, a2 = 0.15, 5.58 
+        UC = a1 + a2 / distance # [€/(t*km)]
+        cost = UC * distance # [€/tCO2]
+        transport_cost += cost
 
     # Pipeline leg
-    if _valid(plant.get('Pipeline_distance')):
-        dist = float(plant['Pipeline_distance'])
-        mCO2_s = annual_CO2_t * 1000 / FLH / 3600    # [kgCO2/s]
-        VCO2 = (mCO2_s / 44) * 22.4                   # [m3/s] ideal gas @ STP
-        D_pipe = 2 * ((VCO2 / 16) / np.pi) ** 0.5     # [m] @ 16 m/s flow velocity
-        CAPEX = np.pi * D_pipe * dist * 1.2 * 568 * CEPCI_ratio / 1000  # [kEUR]
-        transport_cost += levelize_kEUR(CAPEX, annual_CO2, x)
+    if _mode(plant.get('Pipeline_distance')):
+        distance = float(plant['Pipeline_distance'])/1000 # [km]
+        a1, a2, a3, a4 = 0.02, 260, 0.07, -0.61
+        UC = a1 + a2 * (distance / 1)**a3 * (annual_CO2*1000*c["capture_rate"] / 1)**a4 # [€/(t*km)]
+        cost = UC * distance # [€/tCO2]
+        transport_cost += cost
 
     # Rail leg
-    if _valid(plant.get('Rail_distance')):
-        dist = float(plant['Rail_distance'])
-        transport_cost += _loading_lev()
-        cycle_time = (dist / 60 + 5) * 2              # [h] roundtrip @ 60 km/h + 5h unload
-        throughput = 15 * 60 / cycle_time              # [tCO2/h] @15 wagons, 60 t/wagon
-        CAPEX_train = x["CAPEXref_train"] * CEPCI_ratio / 1000  # [kEUR]
-        OPEX_train = (x["OPEXfix"] * x["CAPEXref_train"] + 0.0269 * throughput * dist * 2 * 365) / annual_CO2_t  # [EUR/tCO2]
-        transport_cost += levelize_kEUR(CAPEX_train, annual_CO2, x) + OPEX_train
+    if _mode(plant.get('Rail_distance')):
+        transport_cost += _loading_cost()
+        distance = float(plant['Rail_distance'])       # [km]
+        cycle_time = (distance / 60 + 5) * 2           # [h] roundtrip (*2) @ 60 km/h + 5h unload
+        capacity = 15 * 60 / cycle_time                # [tCO2/h] @15 wagons, 60 t/wagon
 
-    # Shipping leg (to Northern Lights / Oygarden)
-    if _valid(plant.get('Oygarden_distance')):
-        dist = float(plant['Oygarden_distance'])
-        df_ship = c["shipping_costs"].sort_values('distance')
-        transport_cost += float(np.interp(dist, df_ship['distance'].values, df_ship['optimist_0.5Mt'].values))
+        CAPEX_train = c["CAPEXref_train"] * CEPCI_adjustment            # [EUR]
+        CAPEXlev_train = levelize_kEUR(CAPEX_train/1000, annual_CO2, x) # [EUR/tCO2]
+        OPEX_train = x["OPEXfix"]*CAPEX_train + 0.0269*(capacity*(distance*2*365)) # [EUR/yr] 1 roundtrip per day is more than enough!
+        OPEX_train = OPEX_train / (annual_CO2*1000)                                # [EUR/tCO2]
 
-    # Construct final cost breakdown
-    CAC = CAPEX_capture_lev + CAPEX_HP_lev + OPEX + transport_cost  # [EUR/tCO2]
-    strike_price = CAC * (1 + c["profit"])                          # [EUR/tCO2]
-    bio_fraction = plant["Biogenic"] / plant["Total"]
-    BECCS = annual_CO2 * 1000 * bio_fraction * c["capture_rate"]    # [tCO2/yr] negative emissions
-    FCCS = annual_CO2 * 1000 * (1 - bio_fraction) * c["capture_rate"]  # [tCO2/yr] fossil CCS
+        transport_cost += CAPEXlev_train + OPEX_train
+    print(transport_cost)
 
-    cost_details = {
-        "CAPEX_capture": CAPEX_capture_lev,
-        "CAPEX_HP": CAPEX_HP_lev,
-        "OPEX": OPEX,
-        "transport": transport_cost,
-        "CAC": CAC,
-    }
+    # # Shipping leg (to Northern Lights / Oygarden)
+    # if _mode(plant.get('Oygarden_distance')):
+    #     dist = float(plant['Oygarden_distance'])
+    #     df_ship = c["shipping_costs"].sort_values('distance')
+    #     transport_cost += float(np.interp(dist, df_ship['distance'].values, df_ship['optimist_0.5Mt'].values))
+
+    # # Construct final cost breakdown
+    # CAC = CAPEX_capture_lev + CAPEX_HP_lev + OPEX + transport_cost  # [EUR/tCO2]
+    # strike_price = CAC * (1 + c["profit"])                          # [EUR/tCO2]
+    # bio_fraction = plant["Biogenic"] / plant["Total"]
+    # BECCS = annual_CO2 * 1000 * bio_fraction * c["capture_rate"]    # [tCO2/yr] negative emissions
+    # FCCS = annual_CO2 * 1000 * (1 - bio_fraction) * c["capture_rate"]  # [tCO2/yr] fossil CCS
+
+    # cost_details = {
+    #     "CAPEX_capture": CAPEX_capture_lev,
+    #     "CAPEX_HP": CAPEX_HP_lev,
+    #     "OPEX": OPEX,
+    #     "transport": transport_cost,
+    #     "CAC": CAC,
+    # }
+    strike_price = 0
+    FCCS = 0
+    BECCS = 0
+    cost_details = None
     return strike_price, FCCS, BECCS, Ppenalty, Qpenalty, cost_details
 
 def WACCUS_EPR(
@@ -291,6 +295,8 @@ def WACCUS_EPR(
         "profit": profit,
 
         "CAPEXref_capture": CAPEXref_capture,
+        "CAPEXref_loading": CAPEXref_loading,
+        "CAPEXref_train": CAPEXref_train,
         "capture_rate": capture_rate,
         "q_hex": q_hex,
         "CEPCI_reference": CEPCI_reference,
@@ -306,8 +312,6 @@ def WACCUS_EPR(
         "dr": dr,
         "t": t,
         "CAPEXref_HP": CAPEXref_HP,
-        "CAPEXref_loading": CAPEXref_loading,
-        "CAPEXref_train": CAPEXref_train,
         "OPEXfix": OPEXfix,
 
         "camine": camine,
