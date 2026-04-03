@@ -177,7 +177,6 @@ def plan_CCS(plant, c, x, l):
         CAPEX = c["CAPEXref_loading"] * c["SEK_to_EUR"] / 1000 * (annual_CO2 / 150) ** x["k"] * CEPCI_adjustment  # [kEUR]
         return levelize_kEUR(CAPEX, annual_CO2, x)
 
-    # Truck leg (road transport to loading terminal)
     if _mode(plant.get('Truck_distance')):
         loading_cost = _loading_cost()
         distance = float(plant['Truck_distance']) # [km]
@@ -185,14 +184,12 @@ def plan_CCS(plant, c, x, l):
         UC = a1 + a2 / distance # [€/(t*km)]
         truck_cost = UC * distance # [€/tCO2]
 
-    # Pipeline leg
     if _mode(plant.get('Pipeline_distance')):
         distance = float(plant['Pipeline_distance'])/1000 # [km]
         a1, a2, a3, a4 = 0.02, 260, 0.07, -0.61
         UC = a1 + a2 * (distance / 1)**a3 * (annual_CO2*1000*c["capture_rate"] / 1)**a4 # [€/(t*km)]
         pipeline_cost = UC * distance # [€/tCO2]
 
-    # Rail leg
     if _mode(plant.get('Rail_distance')):
         loading_cost += _loading_cost()
         distance = float(plant['Rail_distance'])       # [km]
@@ -206,7 +203,6 @@ def plan_CCS(plant, c, x, l):
 
         rail_cost = CAPEXlev_train + OPEX_train
 
-    # Shipping leg (to Northern Lights / Oygarden)
     if _mode(plant.get('Oygarden_distance')):
         if x["storage"] == "oygarden":
             distance = float(plant['Oygarden_distance'])
@@ -243,6 +239,7 @@ def plan_CCS(plant, c, x, l):
     print(" ")
 
     cost_details = {
+        "CAC": CAC,
         "CAPEX_capture_lev": CAPEX_capture_lev,
         "CAPEX_HP_lev": CAPEX_HP_lev,
         "OPEX_fix": OPEX_fix,
@@ -253,7 +250,6 @@ def plan_CCS(plant, c, x, l):
         "pipeline_cost": pipeline_cost,
         "rail_cost": rail_cost,
         "shipping_cost": shipping_cost,
-        "transport_cost": transport_cost,
         "storage_cost": x["storage_cost"],
     }
     return strike_price, FCCS, BECCS, Ppenalty, Qpenalty, cost_details
@@ -376,9 +372,26 @@ def WACCUS_EPR(
 
     # (2) Simulate EPR subsidies per case
     if EPR_design == "Mitigation":
+        results = []
         for _, plant in plants_df.iterrows():
             strike_price, FCCS, BECCS, Ppenalty, Qpenalty, cost_details = plan_CCS(plant, c, x, l)
-            print(cost_details)
+            results.append({"Name": plant["Name"], "strike_price": strike_price,
+                            "FCCS": FCCS, "BECCS": BECCS, "cost_details": cost_details})
+
+        # Plot cost breakdown for highest and lowest CAC plants
+        if plot_results:
+                sorted_results = sorted(results, key=lambda r: r["cost_details"]["CAC"])
+                for case in [sorted_results[0], sorted_results[-1]]:
+                    details = case["cost_details"]
+                    labels = [k for k, v in details.items() if v > 0]
+                    values = [v for v in details.values() if v > 0]
+
+                    fig, ax = plt.subplots(figsize=(8, 4))
+                    ax.barh(labels, values, color=plt.cm.magma(np.linspace(0.2, 0.8, len(values))))
+                    ax.set_xlabel("Cost [EUR/tCO2]", fontsize=13)
+                    ax.set_title(f"Cost breakdown — {case['Name']}", fontsize=14)
+                    ax.tick_params(labelsize=12)
+                    fig.tight_layout()
 
     elif EPR_design == "Recovery":
         print("Recovery not implemented yet")
