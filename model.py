@@ -212,16 +212,7 @@ def plan_CCS(plant, c, x, l):
         shipping_cost = float(np.interp(distance, df_ship['distance'].values, df_ship[x["shipping_case"]].values))
 
     transport_cost = loading_cost + truck_cost + pipeline_cost + rail_cost + shipping_cost
-    
-    # Construct final cost breakdown
-    CAC = CAPEX_capture_lev + CAPEX_HP_lev + OPEX + transport_cost + x["storage_cost"]  # [EUR/tCO2]
-    print("CAPEX_capture_lev=", CAPEX_capture_lev)
-    print("CAPEX_HP_lev=", CAPEX_HP_lev)
-    print("OPEX=", OPEX)
-    print("transport_cost=", transport_cost)
-    print("storage_cost=", x["storage_cost"])
-    print("CAC=", CAC)
-    print(" ")
+    cost_CCS = CAPEX_capture_lev + CAPEX_HP_lev + OPEX + transport_cost + x["storage_cost"]  # [EUR/tCO2]
 
     fossil = plant["Fossil"] / plant["Total"]                       # [tfossil/t] 
     biogenic = 1 - fossil                                           # [tbiogenic/t] 
@@ -231,15 +222,10 @@ def plan_CCS(plant, c, x, l):
     BECCS = annual_CO2 * biogenic                             # [ktCO2/yr]
     if x["CRC"] < x["ETS"]:
         x["CRC"] = x["ETS"] # In such cases (~50%), CRCs are assumed integrated into the ETS
-    strike_price = CAC - biogenic * x["CRC"]                        # [EUR/tCO2] relative to a fossil ETS reference price
-    strike_price = strike_price * (1 + c["profit"])
-    print("strike_price=", strike_price)
-    print("FCCS=", FCCS)
-    print("BECCS=", BECCS)
-    print(" ")
+    strike_price = cost_CCS - biogenic * x["CRC"]                        # [EUR/tCO2] relative to a fossil ETS reference price
 
     cost_details = {
-        "CAC": CAC,
+        "cost_CCS": cost_CCS,
         "CAPEX_capture_lev": CAPEX_capture_lev,
         "CAPEX_HP_lev": CAPEX_HP_lev,
         "OPEX_fix": OPEX_fix,
@@ -372,16 +358,16 @@ def WACCUS_EPR(
 
     # (2) Simulate EPR subsidies per case
     if EPR_design == "Mitigation":
-        results = []
+        bids = []
         for _, plant in plants_df.iterrows():
             strike_price, FCCS, BECCS, Ppenalty, Qpenalty, cost_details = plan_CCS(plant, c, x, l)
-            results.append({"Name": plant["Name"], "strike_price": strike_price,
-                            "FCCS": FCCS, "BECCS": BECCS, "cost_details": cost_details})
+            bids.append({"Name": plant["Name"], "Design": EPR_design, "strike_price": strike_price,
+                            "FCCS": FCCS, "BECCS": BECCS, "Ppenalty": Ppenalty, "Qpenalty": Qpenalty, "cost_details": cost_details})
 
-        # Plot cost breakdown for highest and lowest CAC plants
+        # Plot cost breakdown for highest and lowest cost_CCS plants
         if plot_results:
-                sorted_results = sorted(results, key=lambda r: r["cost_details"]["CAC"])
-                for case in [sorted_results[0], sorted_results[-1]]:
+                sorted_costs = sorted(bids, key=lambda r: r["cost_details"]["cost_CCS"])
+                for case in [sorted_costs[0], sorted_costs[-1]]:
                     details = case["cost_details"]
                     labels = [k for k, v in details.items() if v > 0]
                     values = [v for v in details.values() if v > 0]
@@ -400,9 +386,41 @@ def WACCUS_EPR(
         print("Circularity not implemented yet")
     
     # (3) Distribute subsidies and calculate KPIs
+    bids.sort(key=lambda x: x['strike_price'])
+    results = {}
 
-    output = 0
-    return output
+    if EPR_design == "Mitigation":
+        remaining_fund = available_subsidies
+        awarded_plants = []
+        for bid in bids:
+            requested_amount = (bid['strike_price'] - x['ETS']) * (bid['FCCS'] + bid['BECCS'])*1000 # [EUR/yr]
+            requested_amount *= (1 + c["profit"]) # [EUR/yr]
+            awarded = requested_amount <= remaining_fund # [EUR/yr]
+            if awarded:
+                remaining_fund -= requested_amount
+            awarded_plants.append({
+                'Name': bid['Name'],
+                'Design': EPR_design,
+                'Awarded': awarded,
+                'Strike price': bid['strike_price'],
+                'FCCS': bid['FCCS'],
+                'BECCS': bid['BECCS'],
+                'Ppenalty': bid['Ppenalty'],
+                'Qpenalty': bid['Qpenalty'],
+                'Cost details': bid['cost_details'],
+            })
+        results['KPI1'] = plastic_supply * 10**-3 # [ktpl/yr]
+        results['KPI2'] = EPR_fee # [EUR/tpl]
+        results['KPI3'] = available_subsidies * 10**-3 # [kEUR/yr]
+        awarded_only = [p for p in awarded_plants if p['Awarded']]
+        results['KPI4'] = len(awarded_only) # [n plants]
+        results['KPI5'] = sum(p['FCCS'] for p in awarded_only) # [ktCO2/yr]
+        results['KPI6'] = sum(p['BECCS'] for p in awarded_only) # [ktCO2/yr]
+        results['KPI7'] = results['KPI5'] + results['KPI6'] # [ktCO2/yr]
+        results['KPI8'] = sum(p['Ppenalty'] for p in awarded_only) * 10**-3 # [GWh/yr]
+        results['KPI9'] = sum(p['Qpenalty'] for p in awarded_only) * 10**-3 # [GWh/yr]
+    
+    return results
 
 if __name__ == "__main__":
 
@@ -422,7 +440,7 @@ if __name__ == "__main__":
     truck_costs = truck_costs.drop(columns=["SEK/ton"])
 
     # Run the model
-    output = WACCUS_EPR(
+    results = WACCUS_EPR(
         EPR_design="Mitigation", # Mitigation, Recovery, Circularity 
         plants_df=plants_df, 
         shipping_costs=shipping_costs,
@@ -435,4 +453,6 @@ if __name__ == "__main__":
     )
 
     print("\n----------------------------------------These are the simulation results:----------------------------------------")
+    for k, v in results.items():
+        print(f"{k}: {v}")
     plt.show()
