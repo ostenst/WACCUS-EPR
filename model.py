@@ -110,6 +110,32 @@ def shipping_adjustment(df, scaling=0.67, debug=False):
     
     return shipping_df
 
+def compression_energy(m, T1, P1, thermo_props, gas='CO2', n_stages=4, pr=3.0, Tdiff=30, n_is=0.8, debug=False):
+    """Multi-stage compression with intercooling. Returns per-stage lists of work [MW],
+    cooling [MW], pressures [bar], and temperatures [K]."""
+    Wcomp, Qcool, P_list, T_list = [], [], [P1], [T1]
+    T, P = T1, P1
+    temps = thermo_props[gas]['temperatures']
+
+    for i in range(n_stages):
+        kappa = np.interp(T, temps, thermo_props[gas]['kappa'])
+        cp_in = np.interp(T, temps, thermo_props[gas]['cp'])
+        P_next = P * pr
+        T_is = T * (pr) ** ((kappa - 1) / kappa)
+        T_act = T + (T_is - T) / n_is
+        cp_out = np.interp(T_act, temps, thermo_props[gas]['cp'])
+        W = m * (cp_in + cp_out) / 2 * (T_act - T) / 1000   # [MW]
+        Q = 0 if i == n_stages - 1 else m * cp_out * (T_act - (T + Tdiff)) / 1000  # [MW]n no cooling in last stage
+        Wcomp.append(W)
+        Qcool.append(Q)
+        P_list.append(P_next)
+        T_list.append(T_act)
+        T, P = T + Tdiff, P_next # NOTE: We neglect that temperatures wouldn't increase (but in reality needs intercooling and then final heating to synth temp).
+
+    if debug:
+        print(f"{gas} compression: {n_stages} stages, total W={sum(Wcomp):.2f} MW, total Q={sum(Qcool):.2f} MW")
+    return Wcomp, Qcool, P_list, T_list
+
 def levelize_kEUR(CAPEX, annual_CO2, x):
     """
     Levelize CAPEX in [kEUR] to [EUR/tCO2].
@@ -141,12 +167,12 @@ def plan_CCS(plant, c, x, l):
     Qdh = Qdh_old * (1 - Qreb/Qsteam)
     P = P - Pcapture - Pcondition
 
-    Qhex = c["q_hex"] * Qreb           # [MW] 
-    Qdiff = Qdh_old - (Qdh + Qhex)     # [MW] 
+    Qrec_hex = c["q_hex"] * Qreb           # [MW] 
+    Qdiff = Qdh_old - (Qdh + Qrec_hex)     # [MW] 
     if Qdiff < 0:
         raise ValueError
     Whp = Qdiff / x["COP"]             # [MW] may exceed P (grid purchase)
-    Qdh = Qdh + Qhex + Whp*x["COP"]    # restores Qdh to Qdh_old
+    Qdh = Qdh + Qrec_hex + Whp*x["COP"]    # restores Qdh to Qdh_old
     P -= Whp                           # negative P means grid power needed
     Ppenalty = (P_old - P) * FLH       # [MWh/yr] if negative P, the Ppenalty is inflated
     Qpenalty = (Qdh_old - Qdh) * FLH   # [MWh/yr]
@@ -240,9 +266,81 @@ def plan_CCS(plant, c, x, l):
     }
     return strike_price, FCCS, BECCS, Ppenalty, Qpenalty, cost_details
 
+def plan_CCU(plant, c, x, l):
+    
+    # Burn fuel and capture/condition CO2
+    annual_CO2 = plant["Total"] # [ktCO2/yr]
+    FLH = plant["FLH"] # [h/yr]
+    mCO2 = annual_CO2 * 1000 / FLH # [tCO2/h]
+    mCO2 = mCO2 * 1000 / 3600 # [kgCO2/s]
+
+    mCO2_captured = mCO2 * c["capture_rate"] # [kgCO2/s]
+    Qreb = mCO2_captured * x["q_reb"]                       # [MW]
+    Pcapture = x["p_capture"] * mCO2_captured/1000*3600     # [MW] 
+
+    # Produce H2 from AEL electrolyzer
+    LHV_H2 = 241.82                       # [kJ/molH2]
+    nCO2 = mCO2_captured/44               # [kmol/s]
+    nH2 = nCO2 * 3                        # [kmol/s] synthesis stoichiometry
+    mH2 = nH2 * 2                         # [kg/s] 
+    QH2 = nH2 * LHV_H2                    # [MWth] H2 production 
+    PH2 = QH2/x["eta_electrolyzer"]         # [MWel] power demand
+
+    # Compress CO2: 3 stages @ pr=3.8, from 40°C / 1 bar [Deng, 2019]
+    Wcomp_CO2, Qcool_CO2, P_CO2, T_CO2 = compression_energy(
+        mCO2_captured, T1=40+273.15, P1=1.0, thermo_props=c["thermo_props"],
+        gas='CO2', n_stages=3, pr=3.8, Tdiff=30, n_is=c["eta_is"])
+
+    # Compress H2: 2 stages @ pr=1.7, from 75°C / 20 bar [Jacobsson & Palmgren, 2025]
+    Wcomp_H2, Qcool_H2, P_H2, T_H2 = compression_energy(
+        mH2, T1=75+273.15, P1=20, thermo_props=c["thermo_props"],
+        gas='H2', n_stages=2, pr=1.7, Tdiff=60, n_is=c["eta_is"])
+
+    # Produce methanol (check Danish Agency Agency for method - we treat the whole synthesis plant as a single unit):
+    LHV_methanol = 19.8 # [MJ/kg] [Formelsamling]
+    Qsteam_synthesis = c["q_synthesis"] * QH2                 # [MWth] 
+    Qmethanol = x["eta_synthesis"] * (QH2 + Qsteam_synthesis) # [MWth]
+    m_methanol = Qmethanol/LHV_methanol /1000*3600*24         # [t/day]
+    Qmethanol = Qmethanol * FLH                               # [MWh/yr]
+
+    # Penalize CHP and recover Qdh
+    Qsteam = plant["Qwaste"]
+    P_old = plant["P"]
+    Qdh_old = plant["Qdh"]
+    P = P_old * (1 - Qreb/Qsteam - Qsteam_synthesis/Qsteam) # [MWel] live steam for synthesis
+    P = P - Pcapture - PH2 - sum(Wcomp_CO2) - sum(Wcomp_H2)   # [MWel]
+    Ppenalty = (P_old - P) * FLH                         # [MWh/yr] probably very positive
+
+    Qdh = Qdh_old * (1 - Qreb/Qsteam - Qsteam_synthesis/Qsteam)
+    Qdh = Qdh + sum(Qcool_CO2) + sum(Qcool_H2) # [MWth] the cooling is NECESSARY
+    Qrec_hex = c["q_hex"] * Qreb           # [MWth] 
+    Qrec_elec = c["q_electrolyzer"] * PH2   # [MWth]
+    Qrec_distill = c['q_distill'] * (QH2 + Qsteam_synthesis) # [MWth] NOTE: optimistic assumption on heat recovery, from condensers at distillation
+    Qavailable = Qrec_hex + (Qrec_elec + Qrec_distill)*x["heat_optimism"] # [MWth] assumed "free" heat exchange
+    Qdiff = Qdh_old - (Qdh + Qavailable) # [MWth]
+    Whp = 0
+    if Qdiff < 0:
+        Qdh = Qdh_old
+    elif Qdiff > 0:
+        Whp = Qdiff / x["COP"]                # [MW] may exceed P (grid purchase)
+        Qdh = Qdh + Qavailable + Whp*x["COP"] # restores Qdh to Qdh_old
+        P -= Whp                              # negative P means grid power needed
+    Qpenalty = (Qdh_old - Qdh) * FLH   # [MWh/yr]
+    print(Qdiff, Whp, Qpenalty)
+
+
+    strike_price = 0
+    FCCU = 0
+    BCCU = 0
+    Ppenalty = 0
+    Qpenalty = 0
+    Qmethanol = 0
+    cost_details = {}
+    return strike_price, FCCU, BCCU, Ppenalty, Qpenalty, Qmethanol, cost_details
+
 def WACCUS_EPR(
     # [C] Constants
-    EPR_design="Mitigation", # [Mitigation, Recovery, Circularity]
+    EPR_design="Recovery", # [Mitigation, Recovery, Circularity]
     plants_df=None, 
     shipping_costs=None,
     truck_costs=None,          
@@ -258,6 +356,10 @@ def WACCUS_EPR(
 
     capture_rate = 0.90,    # [-] 
     q_hex = 0.64,           # [MWth/MWreb] [Beiron, 2022] assumed heat exhange from capture plant
+    q_electrolyzer = 0.154,   # [MWth/MWel] [AEL tech, Fig2.1 MSc Jacobsson & Palmgren, 2025] OR [Danish Renwable Fuels 100MW AEC]
+    eta_is = 0.80,
+    q_synthesis = 0.087,    # [MWsteam/MWH2] about 0.08/(1-0.08)*QH2 [Danish Renewable Fuels Fig3, section 5.2 Methanol from Hydrogen and Carbon Dioxide]
+    q_distill = 0.20,       # [MWth/MWH2+steam]
     CEPCI_reference = 600,  # [-] [University of Manchester, 2025] applies to reference CAPEX values
 
     # [X] Uncertainties
@@ -276,6 +378,9 @@ def WACCUS_EPR(
     p_capture = 0.1,        # [MWh/tCO2] [Beiron, 2022]
     p_condition = 0.37,     # [MJ/kgCO2] [Kumar, 2023]
     COP = 3,                # [MWth/MWel]
+    eta_electrolyzer = 0.699, # [MWH2/MWel] Table2.1 MSc Jacobsson & Palmgren (2025)
+    eta_synthesis = 0.78,    # [MWmethanol/MWH2+steam]
+    heat_optimism = 0.15,    # [-] [0-1.0] [0-100%] optimistic assumption on heat recovery, from condensers at distillation
 
     k = 0.67,                           # [-] [Stenström, 2025] assumed economy-of-scale factor
     CEPCI_scenario = 900,               # [-] [University of Manchester, 2025] applies to reference CAPEX values
@@ -317,6 +422,10 @@ def WACCUS_EPR(
         "CAPEXref_train": CAPEXref_train,
         "capture_rate": capture_rate,
         "q_hex": q_hex,
+        "q_electrolyzer": q_electrolyzer,
+        "q_synthesis": q_synthesis,
+        "q_distill": q_distill,
+        "eta_is": eta_is,
         "CEPCI_reference": CEPCI_reference,
     }
     x = {
@@ -324,7 +433,10 @@ def WACCUS_EPR(
         "p_capture": p_capture,
         "p_condition": p_condition,
         "COP": COP,
-        
+        "eta_electrolyzer": eta_electrolyzer,
+        "eta_synthesis": eta_synthesis,
+        "heat_optimism": heat_optimism,
+
         "k": k,
         "CEPCI_scenario": CEPCI_scenario,
         "dr": dr,
@@ -380,7 +492,11 @@ def WACCUS_EPR(
                     fig.tight_layout()
 
     elif EPR_design == "Recovery":
-        print("Recovery not implemented yet")
+        bids = []
+        for _, plant in plants_df.iterrows():
+            strike_price, FCCU, BCCU, Ppenalty, Qpenalty, Qmethanol, cost_details = plan_CCU(plant, c, x, l)
+            bids.append({"Name": plant["Name"], "Design": EPR_design, "strike_price": strike_price,
+                            "FCCU": FCCU, "BCCU": BCCU, "Ppenalty": Ppenalty, "Qpenalty": Qpenalty, "Qmethanol": Qmethanol, "cost_details": cost_details})
 
     elif EPR_design == "Circularity":
         print("Circularity not implemented yet")
@@ -441,7 +557,7 @@ if __name__ == "__main__":
 
     # Run the model
     results = WACCUS_EPR(
-        EPR_design="Mitigation", # Mitigation, Recovery, Circularity 
+        EPR_design="Recovery", # Mitigation, Recovery, Circularity 
         plants_df=plants_df, 
         shipping_costs=shipping_costs,
         truck_costs=truck_costs,
