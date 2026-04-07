@@ -337,15 +337,39 @@ def plan_CCU(plant, c, x, l):
     CAPEX_HP = x["CAPEXref_HP"] * Whp*x["COP"] * CEPCI_adjustment # [kEUR] neglect HEX costs
     CAPEX_HP_lev = levelize_kEUR(CAPEX_HP, annual_CO2, x)    
 
-    # Add compression costs, H2 costs, and syntehsis costs        
+    # Compression CAPEX [Deng, 2019] — coefficients from CSV, per-stage cost in EUR
+    comp_df = c["compression_costs"].set_index(c["compression_costs"].columns[0])
+    def _comp_capex(Wcomp_list):
+        total = 0
+        for i, W in enumerate(Wcomp_list):
+            W_kW = W * 1000
+            a = comp_df.iloc[0, i]
+            b = comp_df.iloc[1, i]
+            coeff_c = comp_df.iloc[2, i]
+            if i == 3:
+                total += a + b * W_kW + coeff_c * W_kW**0.5
+            else:
+                total += a + b * W_kW**1.5 + coeff_c * W_kW**2
+        return total  # [EUR]
 
-    OPEX_fix = (CAPEX_capture * x["OPEXfix"]) / annual_CO2                           # [EUR/tCO2] 
+    CAPEX_comp_CO2 = _comp_capex(Wcomp_CO2) / 1000 * CEPCI_adjustment  # [kEUR]
+    CAPEX_comp_CO2_lev = levelize_kEUR(CAPEX_comp_CO2, annual_CO2, x)  # [EUR/tCO2]
+    CAPEX_comp_H2 = _comp_capex(Wcomp_H2) / 1000 * CEPCI_adjustment   # [kEUR]
+    CAPEX_comp_H2_lev = levelize_kEUR(CAPEX_comp_H2, annual_CO2, x)   # [EUR/tCO2]
+    CAPEX_H2 = x["CAPEXref_H2"] * PH2 * CEPCI_adjustment             # [kEUR]
+    CAPEX_H2_lev = levelize_kEUR(CAPEX_H2, annual_CO2, x)             # [EUR/tCO2]
+    CAPEX_synthesis = c["CAPEXref_synthesis"] * m_methanol**(-0.315) * 1000 * CEPCI_adjustment  # [kEUR]
+    CAPEX_synthesis_lev = levelize_kEUR(CAPEX_synthesis, annual_CO2, x)  # [EUR/tCO2]
+
+    CAPEX_total = CAPEX_capture + CAPEX_HP + CAPEX_comp_CO2 + CAPEX_comp_H2 + CAPEX_H2 + CAPEX_synthesis
+    CAPEX_total_lev = CAPEX_capture_lev + CAPEX_HP_lev + CAPEX_comp_CO2_lev + CAPEX_comp_H2_lev + CAPEX_H2_lev + CAPEX_synthesis_lev
+
+    OPEX_fix = (CAPEX_capture * x["OPEXfix"]) / annual_CO2              # [EUR/tCO2] NOTE: Only applying capture plant fixed OPEX
     OPEX_makeup = x["camine"] * c['SEK_to_EUR']                                      # [EUR/tCO2]
     OPEX_energy = (Ppenalty*x["celc"] + Qpenalty*x["celc"]*x["cheat"]) / (annual_CO2 * 1000)  # [EUR/tCO2]
-    # OPEX = OPEX_fix + OPEX_makeup + OPEX_energy   
+    OPEX = OPEX_fix + OPEX_makeup + OPEX_energy   
 
-
-
+    # Calculate the methanol strike price
     strike_price = 0
     FCCU = 0
     BCCU = 0
@@ -370,6 +394,7 @@ def WACCUS_EPR(
     CPI2015=314.21, # [SCB]
     CPI2025=417.96, # [SCB]
     CAPEXref_capture = 3550*0.09*1000,  # [MNOK]->[kEUR] @400 ktCO2/yr [Gassnova, Demonstrasjon av Fullskala CO2-Håndtering - Rapport for Avsluttet Forprosjekt]
+    CAPEXref_synthesis = 1.8749,         # [MEUR] power function reference [Danish Renewable Fuels PDF, Fig4 p.186]
 
     capture_rate = 0.90,    # [-] 
     q_hex = 0.64,           # [MWth/MWreb] [Beiron, 2022] assumed heat exhange from capture plant
@@ -404,6 +429,7 @@ def WACCUS_EPR(
     dr = 0.075,                         # [-]
     t = 25,                             # [yr]
     CAPEXref_HP = 860,                  # [kEUR/MWth] [Bergander & Hellander, 2025]
+    CAPEXref_H2 = 550,                  # [kEUR/MWe] [Danish Agency Excel Renewable Fuels AEC100MW]
     CAPEXref_loading = 63000000,        # [SEK*] @150 ktCO2/yr excluding railway track [Koldioxid på tåg, 2024]
     CAPEXref_train = 8610000,           # [EUR*] an oversized train @15 wagons, cost = 4.98 *10**6 + 242*15 *10**3 [MSc Gunnarsson, 2025]
     OPEXfix = 0.04,                     # [-] % of base CAPEX, calculated from [Ramboll-Malmö, 2023]
@@ -437,6 +463,7 @@ def WACCUS_EPR(
         "CAPEXref_capture": CAPEXref_capture,
         "CAPEXref_loading": CAPEXref_loading,
         "CAPEXref_train": CAPEXref_train,
+        "CAPEXref_synthesis": CAPEXref_synthesis,
         "capture_rate": capture_rate,
         "q_hex": q_hex,
         "q_electrolyzer": q_electrolyzer,
@@ -459,6 +486,7 @@ def WACCUS_EPR(
         "dr": dr,
         "t": t,
         "CAPEXref_HP": CAPEXref_HP,
+        "CAPEXref_H2": CAPEXref_H2,
         "OPEXfix": OPEXfix,
 
         "camine": camine,
