@@ -155,6 +155,7 @@ def plan_CCS(plant, c, x, l):
     mCO2 = mCO2 * 1000 / 3600 # [kgCO2/s]
 
     mCO2_captured = mCO2 * c["capture_rate"] # [kgCO2/s]
+    annual_CO2 = annual_CO2 * c["capture_rate"] # [ktCO2/yr]
     Qreb = mCO2_captured * x["q_reb"]                       # [MW]
     Pcapture = x["p_capture"] * mCO2_captured/1000*3600     # [MW] 
     Pcondition = x["p_condition"] * mCO2_captured           # [MW]  
@@ -213,7 +214,7 @@ def plan_CCS(plant, c, x, l):
     if _mode(plant.get('Pipeline_distance')):
         distance = float(plant['Pipeline_distance'])/1000 # [km]
         a1, a2, a3, a4 = 0.02, 260, 0.07, -0.61
-        UC = a1 + a2 * (distance / 1)**a3 * (annual_CO2*1000*c["capture_rate"] / 1)**a4 # [€/(t*km)]
+        UC = a1 + a2 * (distance / 1)**a3 * (annual_CO2*1000/ 1)**a4 # [€/(t*km)]
         pipeline_cost = UC * distance # [€/tCO2]
 
     if _mode(plant.get('Rail_distance')):
@@ -275,6 +276,7 @@ def plan_CCU(plant, c, x, l):
     mCO2 = mCO2 * 1000 / 3600 # [kgCO2/s]
 
     mCO2_captured = mCO2 * c["capture_rate"] # [kgCO2/s]
+    annual_CO2 = annual_CO2 * c["capture_rate"] # [ktCO2/yr]
     Qreb = mCO2_captured * x["q_reb"]                       # [MW]
     Pcapture = x["p_capture"] * mCO2_captured/1000*3600     # [MW] 
 
@@ -327,6 +329,21 @@ def plan_CCU(plant, c, x, l):
         P -= Whp                              # negative P means grid power needed
     Qpenalty = (Qdh_old - Qdh) * FLH   # [MWh/yr]
     print(Qdiff, Whp, Qpenalty)
+
+    # Estimate CAPEX and OPEX
+    CEPCI_adjustment = x["CEPCI_scenario"] / c["CEPCI_reference"]
+    CAPEX_capture = c["CAPEXref_capture"] * (annual_CO2/400) ** x["k"] * CEPCI_adjustment # [kEUR]
+    CAPEX_capture_lev = levelize_kEUR(CAPEX_capture, annual_CO2, x) # [EUR/tCO2]
+    CAPEX_HP = x["CAPEXref_HP"] * Whp*x["COP"] * CEPCI_adjustment # [kEUR] neglect HEX costs
+    CAPEX_HP_lev = levelize_kEUR(CAPEX_HP, annual_CO2, x)    
+
+    # Add compression costs, H2 costs, and syntehsis costs        
+
+    OPEX_fix = (CAPEX_capture * x["OPEXfix"]) / annual_CO2                           # [EUR/tCO2] 
+    OPEX_makeup = x["camine"] * c['SEK_to_EUR']                                      # [EUR/tCO2]
+    OPEX_energy = (Ppenalty*x["celc"] + Qpenalty*x["celc"]*x["cheat"]) / (annual_CO2 * 1000)  # [EUR/tCO2]
+    # OPEX = OPEX_fix + OPEX_makeup + OPEX_energy   
+
 
 
     strike_price = 0
