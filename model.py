@@ -328,7 +328,6 @@ def plan_CCU(plant, c, x, l):
         Qdh = Qdh + Qavailable + Whp*x["COP"] # restores Qdh to Qdh_old
         P -= Whp                              # negative P means grid power needed
     Qpenalty = (Qdh_old - Qdh) * FLH   # [MWh/yr]
-    print(Qdiff, Whp, Qpenalty)
 
     # Estimate CAPEX and OPEX
     CEPCI_adjustment = x["CEPCI_scenario"] / c["CEPCI_reference"]
@@ -364,12 +363,18 @@ def plan_CCU(plant, c, x, l):
     CAPEX_total = CAPEX_capture + CAPEX_HP + CAPEX_comp_CO2 + CAPEX_comp_H2 + CAPEX_H2 + CAPEX_synthesis
     CAPEX_total_lev = CAPEX_capture_lev + CAPEX_HP_lev + CAPEX_comp_CO2_lev + CAPEX_comp_H2_lev + CAPEX_H2_lev + CAPEX_synthesis_lev
 
-    OPEX_fix = (CAPEX_capture * x["OPEXfix"]) / annual_CO2              # [EUR/tCO2] NOTE: Only applying capture plant fixed OPEX
+    OPEX_fix = ((CAPEX_capture + CAPEX_HP + CAPEX_comp_CO2 + CAPEX_comp_H2 + CAPEX_H2 + CAPEX_synthesis) * x["OPEXfix"]) / annual_CO2              # [EUR/tCO2] 
     OPEX_makeup = x["camine"] * c['SEK_to_EUR']                                      # [EUR/tCO2]
     OPEX_energy = (Ppenalty*x["celc"] + Qpenalty*x["celc"]*x["cheat"]) / (annual_CO2 * 1000)  # [EUR/tCO2]
     OPEX = OPEX_fix + OPEX_makeup + OPEX_energy   
 
     # Calculate the methanol strike price
+    methanol_cost = (CAPEX_total_lev + OPEX)/1000 * 44              # [EUR/kmolCO2 = EUR/kmolCH3OH]
+    methanol_cost = methanol_cost / 32                              # [EUR/kgCH3OH]
+    strike_price = methanol_cost*1000                               # [EUR/tCH3OH]
+    print("\nMethanol cost: ", methanol_cost*1000)
+    print("Methanol price: ", x["pmethanol"])
+
     strike_price = 0
     FCCU = 0
     BCCU = 0
@@ -437,6 +442,7 @@ def WACCUS_EPR(
     camine = 44,            # [SEK/tCO2] [Ramboll-Malmö, 2023]
     celc = 60,              # [EUR/MWh]
     cheat = 0.75,           # [% of elc]
+    pmethanol = 625,        # [EUR/t] [MSc Omar & Widgren, 2025]
 
     shipping_case = "pessimist_1Mt", # The main transport uncertainty! Dictates 1Mt, 2Mt, or 3Mt costs.
     storage = "oygarden",   # ["oygarden", "kalundborg"]
@@ -492,6 +498,7 @@ def WACCUS_EPR(
         "camine": camine,
         "celc": celc,
         "cheat": cheat,
+        "pmethanol": pmethanol,
 
         "shipping_case": shipping_case,
         "storage": storage,
