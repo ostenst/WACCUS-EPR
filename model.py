@@ -299,10 +299,9 @@ def plan_CCU(plant, c, x, l):
         gas='H2', n_stages=2, pr=1.7, Tdiff=60, n_is=c["eta_is"])
 
     # Produce methanol (check Danish Agency Agency for method - we treat the whole synthesis plant as a single unit):
-    LHV_methanol = 19.8 # [MJ/kg] [Formelsamling]
     Qsteam_synthesis = c["q_synthesis"] * QH2                 # [MWth] 
     Qmethanol = x["eta_synthesis"] * (QH2 + Qsteam_synthesis) # [MWth]
-    m_methanol = Qmethanol/LHV_methanol /1000*3600*24         # [t/day]
+    m_methanol = Qmethanol/c["LHV_methanol"] /1000*3600*24         # [t/day]
     Qmethanol = Qmethanol * FLH                               # [MWh/yr]
 
     # Penalize CHP and recover Qdh
@@ -369,20 +368,31 @@ def plan_CCU(plant, c, x, l):
     OPEX = OPEX_fix + OPEX_makeup + OPEX_energy   
 
     # Calculate the methanol strike price
-    methanol_cost = (CAPEX_total_lev + OPEX)/1000 * 44              # [EUR/kmolCO2 = EUR/kmolCH3OH]
-    methanol_cost = methanol_cost / 32                              # [EUR/kgCH3OH]
-    strike_price = methanol_cost*1000                               # [EUR/tCH3OH]
-    print("\nMethanol cost: ", methanol_cost*1000)
-    print("Methanol price: ", x["pmethanol"])
+    methanol_cost = (CAPEX_total_lev + OPEX)/1000 * 44               # [EUR/kmolCO2 = EUR/kmolCH3OH]
+    methanol_cost = methanol_cost / 32 *1000                         # [EUR/tCH3OH]
+    strike_price = methanol_cost                                     # [EUR/tCH3OH]
 
-    strike_price = 0
-    FCCU = 0
-    BCCU = 0
-    Ppenalty = 0
-    Qpenalty = 0
-    Qmethanol = 0
-    cost_details = {}
-    return strike_price, FCCU, BCCU, Ppenalty, Qpenalty, Qmethanol, cost_details
+    fossil = plant["Fossil"] / plant["Total"]                       # [tfossil/t] 
+    biogenic = 1 - fossil                                           # [tbiogenic/t] 
+    fossil -= x["carbon_change"]
+    biogenic += x["carbon_change"]
+    FCCU = annual_CO2 * fossil                                # [ktCO2/yr]
+    BCCU = annual_CO2 * biogenic                              # [ktCO2/yr]
+
+    cost_details = {
+        "cost_methanol": methanol_cost,
+        "cost_CCU": CAPEX_total_lev + OPEX,
+        "CAPEX_capture_lev": CAPEX_capture_lev,
+        "CAPEX_HP_lev": CAPEX_HP_lev,
+        "CAPEX_comp_CO2_lev": CAPEX_comp_CO2_lev,
+        "CAPEX_comp_H2_lev": CAPEX_comp_H2_lev,
+        "CAPEX_H2_lev": CAPEX_H2_lev,
+        "CAPEX_synthesis_lev": CAPEX_synthesis_lev,
+        "OPEX_makeup": OPEX_makeup,
+        "OPEX_energy": OPEX_energy,
+        "OPEX_fix": OPEX_fix,
+    }
+    return strike_price, FCCU, BCCU, Qmethanol, Ppenalty, Qpenalty, cost_details
 
 def WACCUS_EPR(
     # [C] Constants
@@ -408,6 +418,7 @@ def WACCUS_EPR(
     q_synthesis = 0.087,    # [MWsteam/MWH2] about 0.08/(1-0.08)*QH2 [Danish Renewable Fuels Fig3, section 5.2 Methanol from Hydrogen and Carbon Dioxide]
     q_distill = 0.20,       # [MWth/MWH2+steam]
     CEPCI_reference = 600,  # [-] [University of Manchester, 2025] applies to reference CAPEX values
+    LHV_methanol = 19.8, # [MJ/kg] [Formelsamling]
 
     # [X] Uncertainties
     baseline_granulates = 1258597, # [t/a] [IVL]
@@ -477,6 +488,7 @@ def WACCUS_EPR(
         "q_distill": q_distill,
         "eta_is": eta_is,
         "CEPCI_reference": CEPCI_reference,
+        "LHV_methanol": LHV_methanol,
     }
     x = {
         "q_reb": q_reb,
@@ -518,7 +530,6 @@ def WACCUS_EPR(
 
     granulate_inc = EPR_fee / (price_granulates * CPI2025/CPI2015 * SEK_to_EUR) # [-]
     products_inc = EPR_fee / (price_products * CPI2025/CPI2015 * SEK_to_EUR) # [-]
-    print(f"Granulate inc: {granulate_inc}, Products inc: {products_inc}")
 
     # (2) Simulate EPR subsidies per case
     if EPR_design == "Mitigation":
@@ -546,48 +557,88 @@ def WACCUS_EPR(
     elif EPR_design == "Recovery":
         bids = []
         for _, plant in plants_df.iterrows():
-            strike_price, FCCU, BCCU, Ppenalty, Qpenalty, Qmethanol, cost_details = plan_CCU(plant, c, x, l)
+            strike_price, FCCU, BCCU, Qmethanol, Ppenalty, Qpenalty, cost_details = plan_CCU(plant, c, x, l)
             bids.append({"Name": plant["Name"], "Design": EPR_design, "strike_price": strike_price,
                             "FCCU": FCCU, "BCCU": BCCU, "Ppenalty": Ppenalty, "Qpenalty": Qpenalty, "Qmethanol": Qmethanol, "cost_details": cost_details})
+        
+        # Plot cost breakdown for highest and lowest cost_CCU plants
+        if plot_results:
+            sorted_costs = sorted(bids, key=lambda r: r["cost_details"]["cost_CCU"])
+            for case in [sorted_costs[0], sorted_costs[-1]]:
+                details = case["cost_details"]
+                labels = [k for k, v in details.items() if v > 0]
+                values = [v for v in details.values() if v > 0]
+                fig, ax = plt.subplots(figsize=(8, 4))
+                ax.barh(labels, values, color=plt.cm.magma(np.linspace(0.2, 0.8, len(values))))
+                ax.set_xlabel("Cost [EUR/tCO2]", fontsize=13)
+                ax.set_title(f"Cost breakdown — {case['Name']}", fontsize=14)
+                ax.tick_params(labelsize=12)
+                fig.tight_layout()
 
     elif EPR_design == "Circularity":
         print("Circularity not implemented yet")
     
     # (3) Distribute subsidies and calculate KPIs
-    bids.sort(key=lambda x: x['strike_price'])
+    bids.sort(key=lambda b: b['strike_price'])
     results = {}
 
     if EPR_design == "Mitigation":
-        remaining_fund = available_subsidies
-        awarded_plants = []
-        for bid in bids:
-            requested_amount = (bid['strike_price'] - x['ETS']) * (bid['FCCS'] + bid['BECCS'])*1000 # [EUR/yr]
-            requested_amount *= (1 + c["profit"]) # [EUR/yr]
-            awarded = requested_amount <= remaining_fund # [EUR/yr]
-            if awarded:
-                remaining_fund -= requested_amount
-            awarded_plants.append({
-                'Name': bid['Name'],
-                'Design': EPR_design,
-                'Awarded': awarded,
-                'Strike price': bid['strike_price'],
-                'FCCS': bid['FCCS'],
-                'BECCS': bid['BECCS'],
-                'Ppenalty': bid['Ppenalty'],
-                'Qpenalty': bid['Qpenalty'],
-                'Cost details': bid['cost_details'],
-            })
-        results['KPI1'] = plastic_supply * 10**-3 # [ktpl/yr]
-        results['KPI2'] = EPR_fee # [EUR/tpl]
-        results['KPI3'] = available_subsidies * 10**-3 # [kEUR/yr]
-        awarded_only = [p for p in awarded_plants if p['Awarded']]
-        results['KPI4'] = len(awarded_only) # [n plants]
-        results['KPI5'] = sum(p['FCCS'] for p in awarded_only) # [ktCO2/yr]
-        results['KPI6'] = sum(p['BECCS'] for p in awarded_only) # [ktCO2/yr]
-        results['KPI7'] = results['KPI5'] + results['KPI6'] # [ktCO2/yr]
-        results['KPI8'] = sum(p['Ppenalty'] for p in awarded_only) * 10**-3 # [GWh/yr]
-        results['KPI9'] = sum(p['Qpenalty'] for p in awarded_only) * 10**-3 # [GWh/yr]
-    
+        fco2_key, bco2_key = 'FCCS', 'BECCS'
+    elif EPR_design == "Recovery":
+        fco2_key, bco2_key = 'FCCU', 'BCCU'
+    else:
+        return results
+
+    remaining_fund = available_subsidies
+    awarded_plants = []
+    for bid in bids:
+        if EPR_design == "Mitigation":
+            revenue = (bid['strike_price'] - x['ETS']) * (bid[fco2_key] + bid[bco2_key]) * 1000  # [EUR/yr]
+        elif EPR_design == "Recovery":
+            methanol_mass = bid['Qmethanol'] / (c['LHV_methanol'] / 3600) / 1000                 # [t/yr] 
+            revenue = (bid['strike_price'] - x['pmethanol']) * methanol_mass                     # [EUR/yr]
+        requested = revenue * (1 + c["profit"])                                                  # [EUR/yr]
+
+        awarded = requested <= remaining_fund
+        if awarded:
+            remaining_fund -= requested
+        awarded_plants.append({**bid, 'Awarded': awarded})
+
+    awarded_only = [p for p in awarded_plants if p['Awarded']]
+
+    results['KPI1'] = plastic_supply * 10**-3                                          # [ktpl/yr]
+    results['KPI2'] = EPR_fee                                                          # [EUR/tpl]
+    results['KPI3'] = available_subsidies * 10**-3                                     # [kEUR/yr]
+    results['KPI4'] = len(awarded_only)                                                # [n plants]
+    results['KPI5'] = sum(p[fco2_key] for p in awarded_only)                           # [ktCO2/yr] fossil
+    results['KPI6'] = sum(p[bco2_key] for p in awarded_only)                           # [ktCO2/yr] biogenic
+    results['KPI7'] = results['KPI5'] + results['KPI6']                                # [ktCO2/yr] total
+    results['KPI8'] = sum(p.get('Qmethanol', 0) for p in awarded_only) * 10**-3       # [GWh/yr] methanol
+    results['KPI9'] = sum(p['Ppenalty'] for p in awarded_only) * 10**-3                # [GWh/yr]
+    results['KPI10'] = sum(p['Qpenalty'] for p in awarded_only) * 10**-3               # [GWh/yr]
+
+    # Energy efficiency of awarded plants (original vs. with CCUS)
+    if awarded_only:
+        awarded_df = pd.DataFrame(awarded_only).merge(plants_df[['Name', 'P', 'Qdh', 'Qwaste', 'FLH']], on='Name')
+        E_waste = (awarded_df['Qwaste'] * awarded_df['FLH']).sum()                         # [MWh/yr]
+        E_power_old = (awarded_df['P'] * awarded_df['FLH']).sum()                          # [MWh/yr]
+        E_heat_old = (awarded_df['Qdh'] * awarded_df['FLH']).sum()                         # [MWh/yr]
+        E_power_new = E_power_old - awarded_df['Ppenalty'].sum()                            # [MWh/yr]
+        E_heat_new = E_heat_old - awarded_df['Qpenalty'].sum()                              # [MWh/yr]
+        E_methanol = awarded_df['Qmethanol'].sum() if 'Qmethanol' in awarded_df else 0     # [MWh/yr]
+        eta_old = (E_power_old + E_heat_old) / E_waste                                      # [-]
+        if E_power_new > 0:
+            eta_new = (E_power_new + E_heat_new + E_methanol) / E_waste
+        else:
+            eta_new = (E_heat_new + E_methanol) / (E_waste + abs(E_power_new))
+        results['KPI11'] = E_waste * 10**-3    # [GWh/yr] treated in awarded plants
+        results['KPI12'] = eta_old              # [-] LHV basis, excluding Qfgc
+        results['KPI13'] = eta_new              # [-] LHV basis, excluding Qfgc
+    else:
+        results['KPI11'] = 0
+        results['KPI12'] = 0
+        results['KPI13'] = 0
+
     return results
 
 if __name__ == "__main__":
