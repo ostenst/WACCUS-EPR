@@ -21,6 +21,7 @@ compression_costs = pd.read_csv('data/compression_costs.csv')
 thermo_props = get_CoolProp()
 
 SEK_to_EUR = 0.091
+NOK_to_EUR = 0.089
 shipping_costs = shipping_adjustment(shipping_costs, scaling=0.67, debug=False)
 cost_columns = [col for col in shipping_costs.columns if col != 'distance']
 shipping_costs[cost_columns] = shipping_costs[cost_columns] * SEK_to_EUR
@@ -43,7 +44,7 @@ model.constants = [
     Constant("plot_results", False),
     Constant("CPI2015", 314.21),
     Constant("CPI2025", 417.96),
-    Constant("CAPEXref_capture", 3550 * 0.09 * 1000),  # [kEUR] @400 ktCO2/yr
+    Constant("CAPEXref_capture", 3550 * NOK_to_EUR * 1000),  # [kEUR] @400 ktCO2/yr
     Constant("CAPEXref_synthesis", 1.8749),              # [MEUR]
     Constant("CAPEXref_loading", 63000000),              # [SEK] @150 ktCO2/yr
     Constant("CAPEXref_train", 8610000),                 # [EUR]

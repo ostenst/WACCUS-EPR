@@ -403,12 +403,13 @@ def WACCUS_EPR(
     compression_costs=None,
     thermo_props=None,    
     SEK_to_EUR=0.091,
+    NOK_to_EUR=0.089,
     profit=0.10,
     plot_results=False,
 
     CPI2015=314.21, # [SCB]
     CPI2025=417.96, # [SCB]
-    CAPEXref_capture = 3550*0.09*1000,  # [MNOK]->[kEUR] @400 ktCO2/yr [Gassnova, Demonstrasjon av Fullskala CO2-Håndtering - Rapport for Avsluttet Forprosjekt]
+    CAPEXref_capture = 3550*0.089*1000,  # [MNOK]->[kEUR] @400 ktCO2/yr [Gassnova, Demonstrasjon av Fullskala CO2-Håndtering - Rapport for Avsluttet Forprosjekt]
     CAPEXref_synthesis = 1.8749,         # [MEUR] power function reference [Danish Renewable Fuels PDF, Fig4 p.186]
 
     capture_rate = 0.90,    # [-] 
