@@ -24,8 +24,11 @@ for _, plant in plants_df.iterrows():
 
     # nH_bio = nC_bio * 1.44 # [kmolH_bio/yr] # I think this was wet biomasss... cf. Beiron (2026)
     # nO_bio = nC_bio * 0.66 # [kmolO_bio/yr]
-    nH_bio = nC_bio * 0.22 # [kmolH_bio/yr]
-    nO_bio = nC_bio * 0 # [kmolO_bio/yr]
+    # nH_bio = nC_bio * 0.22 # [kmolH_bio/yr] # But this "dry" from Beiron is insane! I think its "without ANY oxygen!"
+    # nO_bio = nC_bio * 0 # [kmolO_bio/yr]
+    nH_bio = nC_bio * 1.23 # [kmolH_bio/yr] # Try this Table 5. forest residues: https://www.sciencedirect.com/science/article/pii/S0016236109004967#aep-section-id14
+    nO_bio = nC_bio * 0.58 # [kmolO_bio/yr]
+
     ntot_bio = nC_bio + nH_bio + nO_bio # [kmol_bio/yr]
 
     # Estimating (dry ash-free) mass flows and then LHV using Dulong's formula (Hosokai et al., 2016):
@@ -123,5 +126,3 @@ for _, plant in plants_clean.iterrows():
     print(f"{plant['Name']}: {round(plant['FLH'], 0)} h/yr")
 
 plants_clean.to_csv("data/plants_clean.csv", index=False)
-
-print(" BUG - MUST CHECK WITH JUDIT WHICH BIOMASS C,H,O ratios TO USE!")
