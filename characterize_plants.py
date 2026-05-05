@@ -22,8 +22,10 @@ for _, plant in plants_df.iterrows():
     nO_pl = nC_pl * 0.161 # [kmolO_pl/yr]
     ntot_pl = nC_pl + nH_pl + nO_pl # [kmol_pl/yr]
 
-    nH_bio = nC_bio * 1.44 # [kmolH_bio/yr]
-    nO_bio = nC_bio * 0.66 # [kmolO_bio/yr]
+    # nH_bio = nC_bio * 1.44 # [kmolH_bio/yr] # I think this was wet biomasss... cf. Beiron (2026)
+    # nO_bio = nC_bio * 0.66 # [kmolO_bio/yr]
+    nH_bio = nC_bio * 0.22 # [kmolH_bio/yr]
+    nO_bio = nC_bio * 0 # [kmolO_bio/yr]
     ntot_bio = nC_bio + nH_bio + nO_bio # [kmol_bio/yr]
 
     # Estimating (dry ash-free) mass flows and then LHV using Dulong's formula (Hosokai et al., 2016):
@@ -121,3 +123,5 @@ for _, plant in plants_clean.iterrows():
     print(f"{plant['Name']}: {round(plant['FLH'], 0)} h/yr")
 
 plants_clean.to_csv("data/plants_clean.csv", index=False)
+
+print(" BUG - MUST CHECK WITH JUDIT WHICH BIOMASS C,H,O ratios TO USE!")
