@@ -127,7 +127,7 @@ for _, plant in plants_clean.iterrows():
 
 plants_clean.to_csv("data/plants_clean.csv", index=False)
 
-# ------------------------------------- GASIFICATION -------------------------------------
+# ------------------------------------- GASIFICATION SINGLE -------------------------------------
 # Try gasifying the largest plant, define all its data:
 plants_clean = plants_clean.sort_values(by='m_tot', ascending=False)
 plant = plants_clean.iloc[0]
@@ -183,6 +183,7 @@ LHV_CO = 286 # [MJ/kmolCO]
 E_pl = LHV_pl * m_pl # [MJ/yr] available plastic LHV
 E_H2 = n_H2 * LHV_H2 * nC_pl # [MJ/yr] initial guess of hydrogen products from LHV_pl
 E_CO = E_pl - E_H2 # [MJ/yr] initial guess of carbon monoxide products from LHV_pl
+print(E_H2/E_pl)
 
 n_CO = E_CO / LHV_CO # [kmolCO/yr]
 n_CO = n_CO / nC_pl # [kmolCO/kmolC_pl]
@@ -204,3 +205,76 @@ while n_H2/n_CO > 2:
     # Print names and values of the variables in a table    
     print("n_H2", n_H2, "n_CO", n_CO, "n_CO2", n_CO2, "n_O2", n_O2, "rWGS", rWGS, "n_H2/n_CO", n_H2/n_CO)
     print("     E_product", E_product, "E_eff", E_product*nC_pl/E_input)
+
+# ------------------------------------- GASIFICATION LOOP FOR ALL PLANTS -------------------------------------
+gas_rows = []
+LHV_H2 = 243 # [MJ/kmolH2]
+LHV_CO = 286 # [MJ/kmolCO]
+
+for _, plant in plants_clean.iterrows():
+    name = plant["Name"]
+    nC_pl = plant["nC_pl"]
+    nH_pl = plant["nH_pl"]
+    nO_pl = plant["nO_pl"]
+    m_pl = plant["m_pl"]
+    m_bio = plant["m_bio"]
+    m_h2o = plant["m_h2o"]
+    m_tot = plant["m_tot"]
+    LHV_pl = plant["LHV_pl"]
+    LHV_tot = plant["LHV_tot"]
+
+    # (1) Characterize fuel
+    E_input = LHV_tot * m_tot # [MJ/yr]
+    m_h2o_pl = m_h2o * m_pl / (m_pl + m_bio)
+    nH2O_pl = m_h2o_pl / 18 # [kmolH2O/yr]
+    x = nH_pl / nC_pl
+    y = nO_pl / nC_pl
+
+    # (2) Drying with steam
+    n_steam_dry = y
+    z1 = x - 2 * n_steam_dry
+
+    # (3) First guess for gas composition
+    z2 = z1 / 2 + 1
+    n_H2 = z2
+    E_pl = LHV_pl * m_pl # [MJ/yr]
+    E_H2 = n_H2 * LHV_H2 * nC_pl
+    E_CO = E_pl - E_H2
+    n_CO = (E_CO / LHV_CO) / nC_pl
+    n_CO2 = 1 - n_CO
+    n_O2 = n_CO2 + (n_CO - 1) / 2
+
+    # (4) Iterative WGS adjustment toward H2:CO = 2:1
+    rWGS = 0
+    while n_H2 / n_CO > 2:
+        rWGS += 0.01
+        n_H2 = n_H2 - rWGS
+        n_CO = n_CO + rWGS
+        n_CO2 = n_CO2 - rWGS
+
+    E_product = LHV_H2 * n_H2 + LHV_CO * n_CO # [MJ/kmolC_pl]
+    E_eff = E_product * nC_pl / E_input
+
+    gas_rows.append({
+        "Name": name,
+        "n_H2 [kmol/kmolC_pl]": n_H2,
+        "n_CO [kmol/kmolC_pl]": n_CO,
+        "n_CO2 [kmol/kmolC_pl]": n_CO2,
+        "n_O2 [kmol/kmolC_pl]": n_O2,
+        "n_H2/n_CO [-]": n_H2 / n_CO,
+        "E_eff [-]": E_eff,
+        "nH2O_pl [kmol/yr]": nH2O_pl,
+    })
+
+gas_summary = pd.DataFrame(gas_rows).round({
+    "n_H2 [kmol/kmolC_pl]": 3,
+    "n_CO [kmol/kmolC_pl]": 3,
+    "n_CO2 [kmol/kmolC_pl]": 3,
+    "n_O2 [kmol/kmolC_pl]": 3,
+    "n_H2/n_CO [-]": 3,
+    "E_eff [-]": 3,
+    "nH2O_pl [kmol/yr]": 1,
+})
+
+print("\nGasification summary (all plants):")
+print(gas_summary.to_string(index=False))
