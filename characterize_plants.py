@@ -126,3 +126,81 @@ for _, plant in plants_clean.iterrows():
     print(f"{plant['Name']}: {round(plant['FLH'], 0)} h/yr")
 
 plants_clean.to_csv("data/plants_clean.csv", index=False)
+
+# ------------------------------------- GASIFICATION -------------------------------------
+# Try gasifying the largest plant, define all its data:
+plants_clean = plants_clean.sort_values(by='m_tot', ascending=False)
+plant = plants_clean.iloc[0]
+nC_pl = plant["nC_pl"]
+nH_pl = plant["nH_pl"]
+nO_pl = plant["nO_pl"]
+nC_bio = plant["nC_bio"]
+nH_bio = plant["nH_bio"]
+nO_bio = plant["nO_bio"]
+m_pl = plant["m_pl"]
+m_bio = plant["m_bio"]
+m_ash = plant["m_ash"]
+m_h2o = plant["m_h2o"]
+m_tot = plant["m_tot"]
+x_pl = plant["x_pl"]
+x_bio = plant["x_bio"]
+x_ash = plant["x_ash"]
+x_h2o = plant["x_h2o"]
+LHV_pl = plant["LHV_pl"]
+LHV_bio = plant["LHV_bio"]
+LHV_biowet = plant["LHV_biowet"]
+LHV_tot = plant["LHV_tot"]
+Qlhv = plant["Qlhv"]
+FLH = plant["FLH"]
+print(plant)
+
+# (1) Characterize the fuel in terms of CHxOy (wet basis)
+E_input = LHV_tot * m_tot # [MJ/yr] available fuel LHV
+m_h2o_pl = m_h2o * m_pl / (m_pl + m_bio) # Distribute the moisture to pl/bio
+m_h2o_bio = m_h2o * m_bio / (m_pl + m_bio)
+nH2O_pl = m_h2o_pl / 18 # [kmolH2O/yr] ignore this water for now - must ask Judit what's up with moisture?
+nH2O_bio = m_h2o_bio / 18 # [kmolH2O/yr] 
+
+x = nH_pl / nC_pl # [kmolH/kmolC_pl] proceed from dry basis - correct later if Judit says so
+y = nO_pl / nC_pl # [kmolO/kmolC_pl]
+print("C",x,"H", y)
+
+# (2) Dry the fuel using steam [R2] CHxOy -> CHz1 + aH2O 
+n_steam_dry = y # [kmolH2O/kmolC_pl]
+z1 = x - 2*n_steam_dry # [kmolH/kmolC_pl]
+print("CH",z1, "H2O", n_steam_dry)
+
+# (3) Now set up solver for x1 and x2 in [R3] CHz1 + 1*H2O + x0*O2 -> x1*CO + z2*H2 + x2*CO2
+# Under a FIRST GUESS, all hydrogen in z1 and 1*H2O ends up in H2. Also, all LHV_pl goes to unshifted gas, all LHV_bio can supply endothermic reactions.
+z2 = z1/2 + 1 # [kmolH2/kmolC_pl] note: the quantity of initial d.a. plastic (carbon basis) equals the quantity of steam-dried plastic to be gasified [R2]
+n_H2 = z2 # [kmolH2/kmolC_pl] 
+print("H2",n_H2)
+
+# The below energy balance says, that all plastic LHV goes to the calculated H2 products, and remainder goes to CO.
+LHV_H2 = 243 # [MJ/kmolH2]
+LHV_CO = 286 # [MJ/kmolCO]
+
+E_pl = LHV_pl * m_pl # [MJ/yr] available plastic LHV
+E_H2 = n_H2 * LHV_H2 * nC_pl # [MJ/yr] initial guess of hydrogen products from LHV_pl
+E_CO = E_pl - E_H2 # [MJ/yr] initial guess of carbon monoxide products from LHV_pl
+
+n_CO = E_CO / LHV_CO # [kmolCO/yr]
+n_CO = n_CO / nC_pl # [kmolCO/kmolC_pl]
+n_CO2 = 1 - n_CO # [kmolCO2/kmolC_pl] from [R3]
+n_O2 = n_CO2 + (n_CO - 1)/2 # [kmolO2/kmolC_pl] from [R3]
+print(E_H2, n_CO, n_CO2, n_O2, n_H2/n_CO)
+
+# (4) Adjust the initial guess iteratively until H2:CO is close to 2:1
+rWGS = 0 # [rxn] of [R4] H2 + CO2 -> CO + H2O
+while n_H2/n_CO > 2:
+    rWGS += 0.01
+    n_H2 = n_H2 - rWGS
+    n_CO = n_CO + rWGS
+    n_CO2 = n_CO2 - rWGS
+    n_steam_wgs = rWGS
+
+    E_product = LHV_H2*n_H2 + LHV_CO*n_CO # [MJ/kmolC_pl]
+
+    # Print names and values of the variables in a table    
+    print("n_H2", n_H2, "n_CO", n_CO, "n_CO2", n_CO2, "n_O2", n_O2, "rWGS", rWGS, "n_H2/n_CO", n_H2/n_CO)
+    print("     E_product", E_product, "E_eff", E_product*nC_pl/E_input)
