@@ -3,7 +3,10 @@ import pandas as pd
 from sklearn.linear_model import LinearRegression
 from scipy.interpolate import griddata
 import matplotlib.pyplot as plt
-import searoute as sr
+try:
+    import searoute as sr
+except ImportError:
+    sr = None
 import CoolProp.CoolProp as CP
 
 def get_CoolProp():
@@ -11,45 +14,62 @@ def get_CoolProp():
     """
     Returns:
         dict: Dictionary containing:
-            - 'CO2': Dictionary with temperature as key and properties as values
-            - 'H2': Dictionary with temperature as key and properties as values
+            - 'CO2', 'H2', 'CO', 'H2O': Gas property dictionaries
             Properties include:
             - kappa: specific heat ratio (cp/cv)
             - cp: specific heat at constant pressure [kJ/kgK]
             - cv: specific heat at constant volume [kJ/kgK]
+            - mw: molecular weight [kg/kmol]
     """
     # Temperature range in Kelvin (from -20°C to 200°C)
     T_range = np.linspace(253.15, 473.15, 100)
     
     # Initialize dictionaries for each gas
-    thermo_props = {
-        'CO2': {
-            'temperatures': T_range,
-            'kappa': np.zeros_like(T_range),
-            'cp': np.zeros_like(T_range),
-            'cv': np.zeros_like(T_range)
-        },
-        'H2': {
-            'temperatures': T_range,
-            'kappa': np.zeros_like(T_range),
-            'cp': np.zeros_like(T_range),
-            'cv': np.zeros_like(T_range)
-        }
+    gas_map = {
+        'CO2': ['CO2'],
+        'H2': ['Hydrogen', 'H2'],
+        'CO': ['CO', 'CarbonMonoxide'],
+        'H2O': ['Water', 'H2O'],
     }
+    mw_map = {
+        'CO2': 44.01,
+        'H2': 2.016,
+        'CO': 28.01,
+        'H2O': 18.015,
+    }
+    thermo_props = {}
+    for gas in gas_map:
+        thermo_props[gas] = {
+            'temperatures': T_range,
+            'kappa': np.zeros_like(T_range),
+            'cp': np.zeros_like(T_range),
+            'cv': np.zeros_like(T_range),
+            'mw': mw_map[gas],
+        }
     
-    # Calculate properties for CO2
-    for i, T in enumerate(T_range):
-        thermo_props['CO2']['kappa'][i] = CP.PropsSI('CPMASS', 'T', T, 'P', 1e5, 'CO2') / \
-                                        CP.PropsSI('CVMASS', 'T', T, 'P', 1e5, 'CO2')
-        thermo_props['CO2']['cp'][i] = CP.PropsSI('CPMASS', 'T', T, 'P', 1e5, 'CO2') / 1000  # Convert to kJ/kgK
-        thermo_props['CO2']['cv'][i] = CP.PropsSI('CVMASS', 'T', T, 'P', 1e5, 'CO2') / 1000  # Convert to kJ/kgK
-    
-    # Calculate properties for H2
-    for i, T in enumerate(T_range):
-        thermo_props['H2']['kappa'][i] = CP.PropsSI('CPMASS', 'T', T, 'P', 1e5, 'Hydrogen') / \
-                                       CP.PropsSI('CVMASS', 'T', T, 'P', 1e5, 'Hydrogen')
-        thermo_props['H2']['cp'][i] = CP.PropsSI('CPMASS', 'T', T, 'P', 1e5, 'Hydrogen') / 1000  # Convert to kJ/kgK
-        thermo_props['H2']['cv'][i] = CP.PropsSI('CVMASS', 'T', T, 'P', 1e5, 'Hydrogen') / 1000  # Convert to kJ/kgK
+    # Calculate properties for all gases at 1 bar
+    for gas, fluid_options in gas_map.items():
+        cp_test = None
+        cv_test = None
+        selected_fluid = None
+        for fluid in fluid_options:
+            try:
+                cp_test = CP.PropsSI('CPMASS', 'T', 300.0, 'P', 1e5, fluid)
+                cv_test = CP.PropsSI('CVMASS', 'T', 300.0, 'P', 1e5, fluid)
+                selected_fluid = fluid
+                break
+            except Exception:
+                continue
+        if selected_fluid is None:
+            raise ValueError(f"Could not find CoolProp fluid for {gas}: tried {fluid_options}")
+        for i, T in enumerate(T_range):
+            # Water at 1 bar is not valid below melting point in this call.
+            T_eval = max(T, 273.16) if gas == "H2O" else T
+            cp_mass = CP.PropsSI('CPMASS', 'T', T_eval, 'P', 1e5, selected_fluid)
+            cv_mass = CP.PropsSI('CVMASS', 'T', T_eval, 'P', 1e5, selected_fluid)
+            thermo_props[gas]['kappa'][i] = cp_mass / cv_mass
+            thermo_props[gas]['cp'][i] = cp_mass / 1000  # Convert to kJ/kgK
+            thermo_props[gas]['cv'][i] = cv_mass / 1000  # Convert to kJ/kgK
     
     return thermo_props
 
@@ -110,30 +130,66 @@ def shipping_adjustment(df, scaling=0.67, debug=False):
     
     return shipping_df
 
-def compression_energy(m, T1, P1, thermo_props, gas='CO2', n_stages=4, pr=3.0, Tdiff=30, n_is=0.8, debug=False):
+def compression_energy(n, T1, P1, thermo_props, gas='CO2', n_stages=4, pr=3.0, Tdiff=30, n_is=0.8, debug=False):
     """Multi-stage compression with intercooling. Returns per-stage lists of work [MW],
     cooling [MW], pressures [bar], and temperatures [K]."""
     Wcomp, Qcool, P_list, T_list = [], [], [P1], [T1]
     T, P = T1, P1
-    temps = thermo_props[gas]['temperatures']
+    species = ["CO2", "H2", "CO", "H2O"]
+    if isinstance(gas, dict):
+        gas_mix = {sp: gas.get(sp, 0.0) for sp in species}
+    else:
+        gas_mix = {sp: 0.0 for sp in species}
+        gas_mix[gas] = 1.0
+
+    mix_sum = sum(gas_mix.values())
+    if mix_sum <= 0:
+        raise ValueError("gas mix must have positive molar flow or fraction")
+    y_mix = {sp: gas_mix[sp] / mix_sum for sp in species}
+    temps = thermo_props["CO2"]["temperatures"]
 
     for i in range(n_stages):
-        kappa = np.interp(T, temps, thermo_props[gas]['kappa'])
-        cp_in = np.interp(T, temps, thermo_props[gas]['cp'])
+        T_in = T
+        cp_mix_molar_in = 0
+        cv_mix_molar_in = 0
+        mw_mix = 0
+        for gas_i, y_i in y_mix.items():
+            cp_i = np.interp(T, temps, thermo_props[gas_i]['cp'])  # [kJ/kgK]
+            cv_i = np.interp(T, temps, thermo_props[gas_i]['cv'])  # [kJ/kgK]
+            mw_i = thermo_props[gas_i]['mw']  # [kg/kmol]
+            cp_mix_molar_in += y_i * cp_i * mw_i  # [kJ/kmolK]
+            cv_mix_molar_in += y_i * cv_i * mw_i  # [kJ/kmolK]
+            mw_mix += y_i * mw_i  # [kg/kmol]
+        kappa = cp_mix_molar_in / cv_mix_molar_in
+        cp_in = cp_mix_molar_in / mw_mix  # [kJ/kgK]
+        m_mass = n * mw_mix  # [kg/s]
         P_next = P * pr
         T_is = T * (pr) ** ((kappa - 1) / kappa)
         T_act = T + (T_is - T) / n_is
-        cp_out = np.interp(T_act, temps, thermo_props[gas]['cp'])
-        W = m * (cp_in + cp_out) / 2 * (T_act - T) / 1000   # [MW]
-        Q = 0 if i == n_stages - 1 else m * cp_out * (T_act - (T + Tdiff)) / 1000  # [MW]n no cooling in last stage
+        cp_mix_molar_out = 0
+        for gas_i, y_i in y_mix.items():
+            cp_i = np.interp(T_act, temps, thermo_props[gas_i]['cp'])  # [kJ/kgK]
+            mw_i = thermo_props[gas_i]['mw']  # [kg/kmol]
+            cp_mix_molar_out += y_i * cp_i * mw_i  # [kJ/kmolK]
+        cp_out = cp_mix_molar_out / mw_mix  # [kJ/kgK]
+        W = m_mass * (cp_in + cp_out) / 2 * (T_act - T) / 1000   # [MW]
+        Q = 0 if i == n_stages - 1 else m_mass * cp_out * (T_act - (T + Tdiff)) / 1000  # [MW]n no cooling in last stage
         Wcomp.append(W)
         Qcool.append(Q)
         P_list.append(P_next)
         T_list.append(T_act)
         T, P = T + Tdiff, P_next # NOTE: We neglect that temperatures wouldn't increase (but in reality needs intercooling and then final heating to synth temp).
 
+        if debug:
+            print(
+                f"Stage {i+1}: Pin={P_list[i]:.2f} bar, Pout={P_next:.2f} bar, "
+                f"Tin={T_in:.1f} K, Tout={T_act:.1f} K, cp={cp_in:.3f} kJ/kgK, "
+                f"kappa={kappa:.3f}, W={W:.3f} MW, Q={Q:.3f} MW"
+            )
+
     if debug:
-        print(f"{gas} compression: {n_stages} stages, total W={sum(Wcomp):.2f} MW, total Q={sum(Qcool):.2f} MW")
+        gas_label = f"mix({', '.join([f'{k}:{v:.3f}' for k, v in y_mix.items()])})"
+        print(f"{gas_label} compression: {n_stages} stages, total W={sum(Wcomp):.2f} MW, total Q={sum(Qcool):.2f} MW")
     return Wcomp, Qcool, P_list, T_list
 
 def levelize_kEUR(CAPEX, annual_CO2, x):
@@ -290,12 +346,12 @@ def plan_CCU(plant, c, x, l):
 
     # Compress CO2: 3 stages @ pr=3.8, from 40°C / 1 bar [Deng, 2019]
     Wcomp_CO2, Qcool_CO2, P_CO2, T_CO2 = compression_energy(
-        mCO2_captured, T1=40+273.15, P1=1.0, thermo_props=c["thermo_props"],
+        nCO2, T1=40+273.15, P1=1.0, thermo_props=c["thermo_props"],
         gas='CO2', n_stages=3, pr=3.8, Tdiff=30, n_is=c["eta_is"])
 
     # Compress H2: 2 stages @ pr=1.7, from 75°C / 20 bar [Jacobsson & Palmgren, 2025]
     Wcomp_H2, Qcool_H2, P_H2, T_H2 = compression_energy(
-        mH2, T1=75+273.15, P1=20, thermo_props=c["thermo_props"],
+        nH2, T1=75+273.15, P1=20, thermo_props=c["thermo_props"],
         gas='H2', n_stages=2, pr=1.7, Tdiff=60, n_is=c["eta_is"])
 
     # Produce methanol (check Danish Agency Agency for method - we treat the whole synthesis plant as a single unit):
