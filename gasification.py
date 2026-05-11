@@ -189,10 +189,9 @@ print("Q_steam_demand/Q_steam_available", Q_steam_demand / Q_steam_available)
 # cases_summary.to_csv("results/gasification_trial.csv", index=False)
 
 # -------------- COMPRESSION AND METHANOL SYNTHESIS --------------
-print(" ")
-q_synthesis = 0.087    # [MWsteam/MWH2]
-eta_synthesis = 0.78    # [MWmethanol/MWH2+steam]
-LHV_methanol = 19.8 # [MJ/kg]
+# q_synthesis = 0.087    # [MWsteam/MWH2]
+# eta_synthesis = 0.78    # [MWmethanol/MWH2+steam]
+# LHV_methanol = 19.8 # [MJ/kg]
 eta_electrolyzer = 0.699 # [MWH2/MWel]
 
 thermo_props = get_CoolProp()
@@ -213,9 +212,15 @@ n_mix_s = n_tot / FLH_gasifier / 3600 # [kmol/s]
 # Produce H2 from AEL electrolyzer
 nCO2_s = n_CO2 * nC_gasified / FLH_gasifier / 3600  # [kmolCO2/s]
 nH2_s = nCO2_s * 3  # [kmolH2/s] synthesis stoichiometry for CO2 + 3H2 -> CH3OH + H2O
-# mH2 = nH2_s * 2                       # [kg/s] H2 production - do not delete, save for later
 QH2 = nH2_s * LHV_H2                    # [MWth] 
 PH2 = QH2/eta_electrolyzer              # [MWel] power demand
+
+print(" ")
+print("QH2", QH2, "MWth")
+print("PH2", PH2, "MWel")
+print("E_input", E_input/3600/FLH_gasifier, "MWth")
+print("PH2/E_input", PH2 / (E_input/3600/FLH_gasifier), "MWel/MWth")
+print(" ")
 
 # Compress syngas mix and H2 gas
 Wcomp_mix, Qcool_mix, P_mix, T_mix = compression_energy(
@@ -228,20 +233,45 @@ Wcomp_H2, Qcool_H2, P_H2, T_H2 = compression_energy(
     nH2_s, T1=75+273.15, P1=20, thermo_props=thermo_props,
     gas="H2", n_stages=2, pr=1.7, Tdiff=60, n_is=0.8, debug=True
 )
+recycle_ratio = 3
+Wcomp_recycle = (sum(Wcomp_H2) + sum(Wcomp_mix)) * recycle_ratio
 print("H2 compression totals: Wcomp", sum(Wcomp_H2), "Qcool", sum(Qcool_H2))
+print(" ")
 
-Qsteam_synthesis = q_synthesis * QH2                 # [MWth]  NOTE: MUST CHECK THIS IN DANISH ENERGY AGENCY! I FORGOT THE IMPORTANT CO PORTION!
-Qmethanol = eta_synthesis * (QH2 + Qsteam_synthesis) # [MWth] NOTE: THIS IS JUST THE CO2-portion, NOT THE CO+H2 PORTION!
-print("Qmethanol", Qmethanol, "MWth")
-m_methanol = Qmethanol/LHV_methanol /1000*3600*24    # [t/day]
-Qmethanol = Qmethanol * FLH_gasifier                 # [MWh/yr]
+nCH3OH = nC_gasified # [kmolCH3OH/yr] produced methanol
+mCH3OH = nCH3OH * 32 # [kg/yr]
+print("mCH3OH", mCH3OH/FLH_gasifier/3600, "kg/s")
+LHV_CH3OH = 21.1 # [MJ/kg]
+QCH3OH = mCH3OH * LHV_CH3OH /3600 # [MWh/yr]
+QCH3OH_s = QCH3OH / FLH_gasifier # [MWth]
+print("QCH3OH", QCH3OH, "MWh/yr")
+print("QCH3OH_s", QCH3OH_s, "MWhth")
+print("Input fuel energy:", E_input/3600/FLH_gasifier, "MWth")
+print("INPUT ENERGY:", QH2+Q_steam_demand/3600/FLH_gasifier)
+print(Q_steam_demand/3600/FLH_gasifier)
+print(" ")
+
+# Time to check overall energy balances in MW
+input_fuel = E_input/3600/FLH_gasifier
+q_syngas = E_product * ((nC_pl + nC_bio) * 0.70)/3600/FLH_gasifier
+power_input = PH2 + sum(Wcomp_mix) + sum(Wcomp_H2) + Wcomp_recycle
+hydrogen_produced = QH2
+print("input_fuel", input_fuel, "MWth")
+print("q_syngas", q_syngas, "MWth")
+print("power_input", power_input, "MWel")
+print("power_hydrogen", PH2, "MWel")
+print("hydrogen_produced", hydrogen_produced, "MWth")
 
 print(" ")
-print("Qsteam_synthesis", Qsteam_synthesis*FLH_gasifier*3.6) # [MJ/yr] 3.6 is from MWh to MJ
-print("Qsteam_synthesis/Q_steam_available", Qsteam_synthesis*FLH_gasifier*3.6 / Q_steam_available)
-print("Qmethanol", Qmethanol*FLH_gasifier*3.6)
-print("m_methanol", m_methanol)
-print("=> Seems like the available steam is sufficient for all demands, but this must be verified for all cumulative plant combinations!")
+q_synthesis_input = q_syngas + hydrogen_produced + sum(Wcomp_mix) + sum(Wcomp_H2) + Wcomp_recycle + Q_steam_demand/3600/FLH_gasifier
+q_synthesis_output = QCH3OH_s
+total_input = input_fuel + power_input
+print("q_synthesis_input", q_synthesis_input, "MWth")
+print("q_synthesis_output", q_synthesis_output, "MWth")
+print("q_synthesis_output/q_synthesis_input", q_synthesis_output / q_synthesis_input)
+print("eff_total", q_synthesis_output / total_input)
+print(" >>> The total efficiency is comparable to Beiron (2026) at around 47% (or with DH: 63%)")
+print(" >>> But we require relatively low power input, owing to the more optimistic syn gas composition (and thus reduced H2 demand!)")
 
 # -------------- AUXILIARY OXYGEN AND HEAT PUMP/ELECTROLYZER DEMANDS ----------
 print(" ")
@@ -251,6 +281,3 @@ print("nO2_demand", nO2_demand)
 print("nO2_electrolyzer", nO2_electrolyzer)
 print("nO2_demand/nO2_electrolyzer", nO2_demand / nO2_electrolyzer)
 print("=> Seems like the available oxygen is sufficient for all demands, but this must be verified for all cumulative plant combinations!")
-
-print("Electrolyzer power demand", PH2, "MWel")
-print("Relative to E_input", PH2 / (E_input/3600/FLH_gasifier), "MWel/MWth")
