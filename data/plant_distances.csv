@@ -1,11 +1,11 @@
-Name,Oygarden_distance,Kalundborg_distance,Truck_distance,Pipeline_distance,Rail_distance,Description,
-Renova,622,222,15,None,None,Truck then ship
-Hogbytorp,1490,855,10,None,74, Truck then train then ship
-Filbornaverket,800,151,17,None,None, Truck then ship
-Garstadverket,1507,842,51,None,None, Truck then ship
-Sjolunda,848,206,None,1000,None, Pipeline then ship
-Handeloverket,1507,842,None,500,None, Pipeline then ship
-Bristaverket,1587,911,None,1000,40, Pipeline then train then ship
-Vasteras KVV,1607,948,None,200,None, Pipeline then ship
-Hogdalenverket,1587,911,20,None,None, Truck then ship
-Bolanderna,1724,1033,67,None,None, Truck then ship
+Name,Oygarden_distance,Kalundborg_distance,Truck_distance,Pipeline_distance,Rail_distance,gasification_distance_km,Description,
+Renova,622,222,15,None,None,268,Truck then ship
+Hogbytorp,1490,855,10,None,74,260, Truck then train then ship
+Filbornaverket,800,151,17,None,None,347, Truck then ship
+Garstadverket,1507,842,51,None,None,46, Truck then ship
+Sjolunda,848,206,None,1000,None,428, Pipeline then ship
+Handeloverket,1507,842,None,500,None,96, Pipeline then ship
+Bristaverket,1587,911,None,1000,40,278, Pipeline then train then ship
+Vasteras KVV,1607,948,None,200,None,190, Pipeline then ship
+Hogdalenverket,1587,911,20,None,None,240, Truck then ship
+Bolanderna,1724,1033,67,None,None,273, Truck then ship

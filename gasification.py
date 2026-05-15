@@ -1,5 +1,7 @@
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
+from scipy.interpolate import griddata
 from model import get_CoolProp, compression_energy
 
 # Read pre-calculated plant characterization
@@ -272,6 +274,82 @@ print("OPEX_H2_lev", OPEX_H2_lev, "EUR/t METHANOL")
 cost_lev = CAPEX_sorting_lev + CAPEX_gasification_lev + CAPEX_H2_lev + OPEX_sorting_lev + OPEX_gasification_lev + OPEX_H2_lev # [EUR/t METHANOL]
 print("===> cost_lev", cost_lev, "EUR/t METHANOL")
 
+# COSTS OF WASTE TRANSPORT AND HEAT PUMPS - THIS IS A UNIQUE CALCULATION FOR EACH REPLACED PLANT!
+def interpolate_truck_cost_eur_per_t(
+    mass_t_per_yr,
+    distance_km,
+    truck_costs_df,
+    sek_to_eur,
+    debug=False,
+):
+    """2D interpolation of truck unit cost from annual mass [t/a] and haul distance [km] → [EUR/t].
+
+    ``truck_costs.csv`` columns ``mass`` and ``km`` must use the same units as the inputs.
+    """
+    masses = truck_costs_df["mass"].values  # [t/a] anchor throughput in truck_costs.csv
+    distances = truck_costs_df["km"].values  # [km]
+    costs_sek_per_t = truck_costs_df["SEK/ton"].values  # [SEK/t]
+    points = np.column_stack((masses, distances))
+
+    mass_min, mass_max = masses.min(), masses.max()
+    dist_min, dist_max = distances.min(), distances.max()
+    if (
+        mass_t_per_yr < mass_min
+        or mass_t_per_yr > mass_max
+        or distance_km < dist_min
+        or distance_km > dist_max
+    ):
+        method = "nearest"  # extrapolate outside the tabulated grid
+    else:
+        method = "linear"
+
+    cost_sek_per_t = float(griddata(points, costs_sek_per_t, (mass_t_per_yr, distance_km), method=method))
+    cost_eur_per_t = cost_sek_per_t * sek_to_eur  # [EUR/t]
+    if debug:
+        print(
+            "interpolate_truck_cost_eur_per_t:",
+            f"mass={mass_t_per_yr:.0f} t/a",
+            f"km={distance_km:.0f}",
+            f"method={method}",
+            f"cost={cost_eur_per_t:.2f} EUR/t",
+        )
+    return cost_eur_per_t
+
+truck_costs = pd.read_csv("data/truck_costs.csv")
+plant_distance_km = plant["gasification_distance_km"]  # [km]
+waste_mass_t_per_yr = m_tot / 1000  # [t/a] same basis as truck_costs.csv ``mass`` column
+truck_cost_eur_per_t = interpolate_truck_cost_eur_per_t(
+    waste_mass_t_per_yr,
+    plant_distance_km,
+    truck_costs,
+    SEK_to_EUR,
+    debug=False,
+)
+truck_total = waste_mass_t_per_yr * truck_cost_eur_per_t # [EUR/yr]
+truck_cost_lev = truck_total / annual_methanol # [EUR/t METHANOL]
+print("\nTruck transport:", truck_cost_eur_per_t, "EUR/t waste")
+print("  (mass", waste_mass_t_per_yr, "t/a,", plant_distance_km, "km)")
+print("Truck cost lev:", truck_cost_lev, "EUR/t METHANOL")
+
+FLH = plant["FLH"] # [h/yr]
+COP = 2.5 # [-] COP of the heat pump
+CAPEX_HP = 0.86 # [MEUR/MWth] [Bergander & Hellander, 2024]
+# heat_lost = (plant["Qdh"] + plant["Qfgc"]) * FLH # [MWh/yr]
+# power_lost = plant["P"] * FLH # [MWh/yr]
+Qlost = plant["Qdh"] + plant["Qfgc"] # [MWth]
+Plost = plant["P"] # [MWel]
+print(Qlost+Plost, plant["Qlhv"], plant["Qwaste"])
+Whp = Qlost / COP # [MWel]
+CAPEX_HP = CAPEX_HP * Qlost # [MEUR]
+CAPEX_HP_lev = levelize_MEUR_methanol(CAPEX_HP, annual_methanol, dr, lifetime) # [EUR/t METHANOL]
+OPEX_fix_HP = CAPEX_HP * fixate_CAPEX # [MEUR p.a.]
+OPEX_HP = (Whp + Plost) * FLH * celc * 10**-6 + OPEX_fix_HP # [MEUR p.a.]
+OPEX_HP_lev = OPEX_HP / (annual_methanol * 10**-6) # [EUR/t METHANOL]
+print("\nCAPEX_HP", CAPEX_HP, "MEUR")
+print("CAPEX_HP_lev", CAPEX_HP_lev, "EUR/t METHANOL")
+print("OPEX_fix_HP", OPEX_fix_HP, "MEUR p.a.")
+print("OPEX_HP", OPEX_HP, "MEUR p.a.")
+print("OPEX_HP_lev", OPEX_HP_lev, "EUR/t METHANOL")
 
 def plot_levelized_cost_contributions(
     cost_parts,

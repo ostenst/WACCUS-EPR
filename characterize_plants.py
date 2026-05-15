@@ -73,7 +73,9 @@ for _, plant in plants_df.iterrows():
 # Merge computed columns into the plants dataframe
 plants_clean = plants_df.merge(pd.DataFrame(rows), on="Name", how="left")
 display_cols = {
-    "Name": "Plant", "FLH": "FLH [h/yr]",
+    "Name": "Plant",
+    "gasification_distance_km": "gasif_dist [km]",
+    "FLH": "FLH [h/yr]",
     "m_pl": "m_pl [kg/yr]", "m_bio": "m_bio [kg/yr]",
     "m_ash": "m_ash [kg/yr]", "m_h2o": "m_h2o [kg/yr]", "m_tot": "m_tot [kg/yr]",
     "x_pl": "x_pl", "x_bio": "x_bio", "x_ash": "x_ash", "x_h2o": "x_h2o",
@@ -82,7 +84,8 @@ display_cols = {
     "Qlhv": "Qlhv [MW]",
 }
 summary = plants_clean[list(display_cols.keys())].rename(columns=display_cols)
-round_rules = { 
+round_rules = {
+    "gasif_dist [km]": 0,
     "FLH [h/yr]": 0, "m_pl [kg/yr]": 0, "m_bio [kg/yr]": 0, "m_ash [kg/yr]": 0,
     "m_h2o [kg/yr]": 0, "m_tot [kg/yr]": 0,
     "x_pl": 3, "x_bio": 3, "x_ash": 3, "x_h2o": 3,
@@ -94,6 +97,7 @@ summary = summary.round(round_rules)
 
 # Print a list of explanations for each column, for example: "m_pl [kg/yr] = dry ash-free plastic mass flow in the fuel"
 explanations = {
+    "gasif_dist [km]": "Road distance from plant to gasification site (plant_distances.csv)",
     "FLH [h/yr]": "Full load hours",
     "Qlhv [MW]": "Lower heating value of the total fuel",
     "nC_pl [kmol/yr]": "Molar flow of carbon in the dry ash-free plastic",
