@@ -36,17 +36,24 @@ DISCOUNT_RATE = 0.075  # [-] real discount rate for CRF
 LIFETIME_YR = 25  # [yr] economic lifetime for levelization
 RECYCLE_RATIO = 3  # [-] compressor work multiplier for recycle loops
 
-CAPEX_SORTING_REF_MEUR = 350.0 * SEK_TO_EUR  # [MEUR] reference sorting CAPEX at reference waste throughput
-CAPACITY_SORTING_REF_T_PER_YR = 140_000.0  # [t waste/a] reference sorting capacity (Brista)
+# CEPCI escalation: overnight CAPEX at ref year → CEPCI_2026 [University of Manchester, 2025]
+CEPCI_2026 = 900.0  # [-] target index for all escalated CAPEX in this script
+CEPCI_2022 = 816.0  # [-] ECOPLANTA gasification reference year
 
-CAPEX_GASIFICATION_REF_MEUR = 749_729_639 * 1e-6  # [MEUR] reference gasification+synfuel train (ECOPLANTA)
+CAPEX_SORTING_REF_MEUR = 650.0 * SEK_TO_EUR  # [MEUR] sorting plant at CEPCI_SORTING_REF
+CEPCI_SORTING_REF = CEPCI_2026  # [-] Tekniska Verken quote year matches target
+CAPACITY_SORTING_REF_T_PER_YR = 200_000.0  # [t waste/a] reference sorting capacity (Tekniska Verken)
+OPEX_VAR_SORTING_EUR_PER_T_WASTE = 200.0 * SEK_TO_EUR  # [EUR/t waste] variable sorting OPEX at CEPCI_OPEX_SORTING_REF (Brista)
+CEPCI_OPEX_SORTING_REF = CEPCI_2022  # [-] Brista variable OPEX reference year
+
+CAPEX_GASIFICATION_REF_MEUR = 749_729_639 * 1e-6  # [MEUR] gasification+synfuel train at CEPCI_GASIFICATION_REF
+CEPCI_GASIFICATION_REF = CEPCI_2022  # [-] ECOPLANTA reference year
 CAPACITY_GASIFICATION_REF_T_PER_YR = 237_000.0  # [t methanol/a] reference methanol nameplate
+OPEX_VAR_GASIFICATION_EUR_PER_MWH_FUEL = 1.4  # [EUR/MWh_fuel] variable non-energy OPEX at CEPCI_OPEX_GASIFICATION_REF (Beiron)
+CEPCI_OPEX_GASIFICATION_REF = CEPCI_2026  # [-] Beiron variable OPEX reference year
 
 CAPEX_H2_REF_KEUR_PER_MWE = 550.0  # [kEUR/MWel] AEC reference specific cost (100 MW class)
 CELC_EUR_PER_MWH = 50.0  # [EUR/MWh_el] variable electricity price for OPEX
-
-OPEX_VAR_SORTING_EUR_PER_T_WASTE = 200.0 * SEK_TO_EUR  # [EUR/t waste] variable sorting OPEX (Brista)
-OPEX_VAR_GASIFICATION_EUR_PER_MWH_FUEL = 1.4  # [EUR/MWh_fuel] variable non-energy OPEX (Beiron 2026)
 
 COP_HEAT_PUMP = 2.5  # [-] heat pump COP (gasification.py)
 CAPEX_HP_REF_MEUR_PER_MWTH = 0.86  # [MEUR/MWth] [Bergander & Hellander, 2024]
@@ -55,6 +62,19 @@ N_STEAM_ASSUMED = 1.0  # [kmolH2O/kmolC] steam moles assumed in gasification ste
 AIR_RATIO_COMBUSTOR = 1.2  # [-] excess air for O2 demand to combustor
 
 N_CASES = 10  # [-] number of cumulative plant-count scenarios (largest … 10th largest)
+
+
+def cepci_escalate(
+    capex_at_ref: float,
+    cepci_ref: float,
+    cepci_target: float = CEPCI_2026,
+    debug: bool = False,
+) -> float:
+    """Scale a cost from ``cepci_ref`` to ``cepci_target`` (default CEPCI_2026)."""
+    out = capex_at_ref * cepci_target / cepci_ref
+    if debug:
+        print("cepci_escalate", capex_at_ref, cepci_ref, cepci_target, "->", out)
+    return out
 
 
 @dataclass
@@ -421,15 +441,27 @@ def simulate_case(fuel: FuelAggregate, thermo_props: dict[str, Any], debug: bool
     annual_methanol_t_yr = m_ch3oh_kg_yr / 1000.0  # [t methanol/a]
     capacity_sorting_t_yr = fuel.m_tot / 1000.0  # [t waste/a] sorted waste nameplate
 
-    capex_sorting_meur = CAPEX_SORTING_REF_MEUR * (capacity_sorting_t_yr / CAPACITY_SORTING_REF_T_PER_YR) ** SCALE_EXPONENT_K  # [MEUR]
+    capex_sorting_at_ref = CAPEX_SORTING_REF_MEUR * (
+        capacity_sorting_t_yr / CAPACITY_SORTING_REF_T_PER_YR
+    ) ** SCALE_EXPONENT_K  # [MEUR] at CEPCI_SORTING_REF
+    capex_sorting_meur = cepci_escalate(capex_sorting_at_ref, CEPCI_SORTING_REF)  # [MEUR] at CEPCI_2026
     opex_fix_sorting_meur = capex_sorting_meur * FIXATE_CAPEX  # [MEUR/a]
-    opex_var_sorting_meur = OPEX_VAR_SORTING_EUR_PER_T_WASTE * capacity_sorting_t_yr * 1e-6  # [MEUR/a]
+    opex_var_sorting_eur_per_t = cepci_escalate(
+        OPEX_VAR_SORTING_EUR_PER_T_WASTE, CEPCI_OPEX_SORTING_REF
+    )  # [EUR/t waste] at CEPCI_2026
+    opex_var_sorting_meur = opex_var_sorting_eur_per_t * capacity_sorting_t_yr * 1e-6  # [MEUR/a]
     opex_sorting_meur_a = opex_fix_sorting_meur + opex_var_sorting_meur  # [MEUR/a]
 
-    capex_gasif_meur = CAPEX_GASIFICATION_REF_MEUR * (annual_methanol_t_yr / CAPACITY_GASIFICATION_REF_T_PER_YR) ** SCALE_EXPONENT_K  # [MEUR]
+    capex_gasif_at_ref = CAPEX_GASIFICATION_REF_MEUR * (
+        annual_methanol_t_yr / CAPACITY_GASIFICATION_REF_T_PER_YR
+    ) ** SCALE_EXPONENT_K  # [MEUR] at CEPCI_GASIFICATION_REF
+    capex_gasif_meur = cepci_escalate(capex_gasif_at_ref, CEPCI_GASIFICATION_REF)  # [MEUR] at CEPCI_2026
     opex_fix_gasif_meur = capex_gasif_meur * FIXATE_CAPEX  # [MEUR/a]
+    opex_var_gasif_eur_per_mwh = cepci_escalate(
+        OPEX_VAR_GASIFICATION_EUR_PER_MWH_FUEL, CEPCI_OPEX_GASIFICATION_REF
+    )  # [EUR/MWh_fuel] at CEPCI_2026
     opex_var_gasif_meur = (
-        OPEX_VAR_GASIFICATION_EUR_PER_MWH_FUEL * (fuel.lhv_tot_blend * fuel.m_tot) / 3600.0 * 1e-6
+        opex_var_gasif_eur_per_mwh * (fuel.lhv_tot_blend * fuel.m_tot) / 3600.0 * 1e-6
     )  # [MEUR/a]
     opex_energy_gasif_meur = (w_mix_sum + w_h2_sum + w_recycle) * FLH_H_PER_YR * CELC_EUR_PER_MWH * 1e-6  # [MEUR/a]
     opex_gasif_meur_a = opex_fix_gasif_meur + opex_var_gasif_meur + opex_energy_gasif_meur  # [MEUR/a]
