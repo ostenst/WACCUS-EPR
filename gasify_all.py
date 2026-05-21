@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 from scipy.interpolate import griddata
 
-from model import compression_energy, get_CoolProp
+from model import compression_capex_eur, compression_energy, get_CoolProp
 
 # --- Physical / economic constants (aligned with gasification.py) ---
 ETA_BOILER = 0.85  # [-] boiler efficiency
@@ -37,25 +37,26 @@ LIFETIME_YR = 25  # [yr] economic lifetime for levelization
 RECYCLE_RATIO = 3  # [-] compressor work multiplier for recycle loops
 
 # CEPCI escalation: overnight CAPEX at ref year → CEPCI_2026 [University of Manchester, 2025]
-CEPCI_2026 = 900.0  # [-] target index for all escalated CAPEX in this script
-CEPCI_2022 = 816.0  # [-] ECOPLANTA gasification reference year
+CEPCI_2026 = 900.0  # [-] target index (model.py CEPCI_scenario default)
+CEPCI_2022 = 816.0  # [-] CEPCI 2022 (HP CAPEX base, Brista sorting OPEX base)
+CEPCI_LEGACY = 600.0  # [-] legacy equipment CAPEX base (model.py CEPCI_reference)
 
-CAPEX_SORTING_REF_MEUR = 650.0 * SEK_TO_EUR  # [MEUR] sorting plant at CEPCI_SORTING_REF
-CEPCI_SORTING_REF = CEPCI_2026  # [-] Tekniska Verken quote year matches target
-CAPACITY_SORTING_REF_T_PER_YR = 200_000.0  # [t waste/a] reference sorting capacity (Tekniska Verken)
+CAPEX_SORTING_REF_MEUR = 650.0 * SEK_TO_EUR  # [MEUR] Tekniska Verken sorting plant at CEPCI_SORTING_REF
+CEPCI_SORTING_REF = CEPCI_2026  # [-] Tekniska Verken quote year (already at target)
+CAPACITY_SORTING_REF_T_PER_YR = 200_000.0  # [t waste/a] Tekniska Verken reference capacity
 OPEX_VAR_SORTING_EUR_PER_T_WASTE = 200.0 * SEK_TO_EUR  # [EUR/t waste] variable sorting OPEX at CEPCI_OPEX_SORTING_REF (Brista)
 CEPCI_OPEX_SORTING_REF = CEPCI_2022  # [-] Brista variable OPEX reference year
 
-CAPEX_GASIFICATION_REF_MEUR = 749_729_639 * 1e-6  # [MEUR] gasification+synfuel train at CEPCI_GASIFICATION_REF
-CEPCI_GASIFICATION_REF = CEPCI_2022  # [-] ECOPLANTA reference year
+CAPEX_GASIFICATION_REF_MEUR = 749_729_639 * 1e-6  # [MEUR] ECOPLANTA gasification+synfuel train at CEPCI_GASIFICATION_REF
+CEPCI_GASIFICATION_REF = CEPCI_LEGACY  # [-] legacy ref year → escalated to CEPCI_2026
 CAPACITY_GASIFICATION_REF_T_PER_YR = 237_000.0  # [t methanol/a] reference methanol nameplate
 OPEX_VAR_GASIFICATION_EUR_PER_MWH_FUEL = 1.4  # [EUR/MWh_fuel] variable non-energy OPEX at CEPCI_OPEX_GASIFICATION_REF (Beiron)
 CEPCI_OPEX_GASIFICATION_REF = CEPCI_2026  # [-] Beiron variable OPEX reference year
 
 CAPEX_H2_REF_KEUR_PER_MWE = 550.0  # [kEUR/MWel] AEC reference specific cost (100 MW class)
-CELC_EUR_PER_MWH = 50.0  # [EUR/MWh_el] variable electricity price for OPEX
-
-COP_HEAT_PUMP = 2.5  # [-] heat pump COP (gasification.py)
+CEPCI_H2_REF = 600.0  # [-] legacy H2/compressor CAPEX reference year (model.py plan_CCU)
+CELC_EUR_PER_MWH = 60.0  # [EUR/MWh_el] matches model.py WACCUS_EPR default
+COP_HEAT_PUMP = 3.0  # [-] matches model.py WACCUS_EPR default
 CAPEX_HP_REF_MEUR_PER_MWTH = 0.86  # [MEUR/MWth] [Bergander & Hellander, 2024]
 
 N_STEAM_ASSUMED = 1.0  # [kmolH2O/kmolC] steam moles assumed in gasification step [R3]
@@ -186,7 +187,7 @@ def replacement_costs_for_plant(plant_row: pd.Series, truck_costs_df: pd.DataFra
     q_lost_mwth = float(plant_row["Qdh"]) + float(plant_row["Qfgc"])  # [MWth] heat output replaced
     p_lost_mwel = float(plant_row["P"])  # [MWel] retained in OPEX term as in gasification.py
     whp_mwel = q_lost_mwth / COP_HEAT_PUMP  # [MWel]
-    capex_hp_meur = CAPEX_HP_REF_MEUR_PER_MWTH * q_lost_mwth  # [MEUR]
+    capex_hp_meur = CAPEX_HP_REF_MEUR_PER_MWTH * q_lost_mwth * (CEPCI_2026 / CEPCI_2022)  # [MEUR] CEPCI 2022→2026
     opex_fix_hp_meur = capex_hp_meur * FIXATE_CAPEX  # [MEUR/a]
     opex_var_hp_meur = (whp_mwel + p_lost_mwel) * flh_plant * CELC_EUR_PER_MWH * 1e-6  # [MEUR/a]
     opex_hp_meur = opex_fix_hp_meur + opex_var_hp_meur  # [MEUR/a]
@@ -310,7 +311,12 @@ def levelize_meur_to_eur_per_t_methanol(
     return capex_annual_eur / annual_methanol_t_per_yr  # [EUR/t MeOH]
 
 
-def simulate_case(fuel: FuelAggregate, thermo_props: dict[str, Any], debug: bool = False) -> Dict[str, Any]:
+def simulate_case(
+    fuel: FuelAggregate,
+    thermo_props: dict[str, Any],
+    compression_costs_df: pd.DataFrame,
+    debug: bool = False,
+) -> Dict[str, Any]:
     """Run gasification → synthesis → costs for one aggregated fuel bundle.
 
     Return dict keys use SI tags in names where helpful: *_mj_yr, *_mwth, *_mwel, *_t_yr, *_kmol_s, *_meur, *_lev [EUR/t].
@@ -466,9 +472,14 @@ def simulate_case(fuel: FuelAggregate, thermo_props: dict[str, Any], debug: bool
     opex_energy_gasif_meur = (w_mix_sum + w_h2_sum + w_recycle) * FLH_H_PER_YR * CELC_EUR_PER_MWH * 1e-6  # [MEUR/a]
     opex_gasif_meur_a = opex_fix_gasif_meur + opex_var_gasif_meur + opex_energy_gasif_meur  # [MEUR/a]
 
-    capex_h2_meur = CAPEX_H2_REF_KEUR_PER_MWE * ph2_mwel * 1e-3  # [MEUR]
-    opex_fix_h2_meur = capex_h2_meur * FIXATE_CAPEX  # [MEUR/a]
-    opex_var_h2_meur = ph2_mwel * FLH_H_PER_YR * CELC_EUR_PER_MWH * 1e-6  # [MEUR/a]
+    cepci_h2_adjustment = cepci_escalate(1.0, CEPCI_H2_REF)  # [-] align with plan_CCU CEPCI_scenario / CEPCI_reference
+    capex_h2_electrolyzer_meur = CAPEX_H2_REF_KEUR_PER_MWE * ph2_mwel * 1e-3 * cepci_h2_adjustment  # [MEUR]
+    capex_h2_comp_meur = (
+        compression_capex_eur(wcomp_h2, compression_costs_df, debug=debug) * 1e-6 * cepci_h2_adjustment
+    )  # [MEUR]
+    capex_h2_meur = capex_h2_electrolyzer_meur + capex_h2_comp_meur  # [MEUR] electrolyzer + H2 compression
+    opex_fix_h2_meur = capex_h2_meur * FIXATE_CAPEX  # [MEUR/a] fixed OPEX on all H2-block CAPEX
+    opex_var_h2_meur = ph2_mwel * FLH_H_PER_YR * CELC_EUR_PER_MWH * 1e-6  # [MEUR/a] electrolyzer electricity only
     opex_h2_meur_a = opex_fix_h2_meur + opex_var_h2_meur  # [MEUR/a]
 
     combusted_t_yr = m_combustor / 1000.0  # [t/a]
@@ -512,7 +523,9 @@ def simulate_case(fuel: FuelAggregate, thermo_props: dict[str, Any], debug: bool
         "annual_methanol_t_yr": annual_methanol_t_yr,  # [t/a]
         "capex_sorting_meur": capex_sorting_meur,  # [MEUR] centralized hub
         "capex_gasif_meur": capex_gasif_meur,  # [MEUR]
-        "capex_h2_meur": capex_h2_meur,  # [MEUR]
+        "capex_h2_meur": capex_h2_meur,  # [MEUR] electrolyzer + H2 compression
+        "capex_h2_electrolyzer_meur": capex_h2_electrolyzer_meur,  # [MEUR]
+        "capex_h2_comp_meur": capex_h2_comp_meur,  # [MEUR]
         "opex_sorting_meur_a": opex_sorting_meur_a,  # [MEUR/a]
         "opex_gasif_meur_a": opex_gasif_meur_a,  # [MEUR/a]
         "opex_h2_meur_a": opex_h2_meur_a,  # [MEUR/a]
@@ -589,7 +602,7 @@ def plot_final_case_cost_breakdown(
             )
 
     # Panel B — centralized gasifier (single train)
-    cen_labels = ["Sorting", "Gasification", "H2 electrolyzer"]
+    cen_labels = ["Sorting", "Gasification", "H2 (el.+comp.)"]
     cen_x = np.arange(3)
     cen_w = 0.35
     capex_cen = [
@@ -864,6 +877,7 @@ def main() -> None:
 
     thermo_props = get_CoolProp()  # species cp/cv vs T for compression_energy [kJ/kgK] paths in model.py
     truck_costs = pd.read_csv("data/truck_costs.csv")
+    compression_costs = pd.read_csv("data/compression_costs.csv")
 
     energy_rows: List[Dict[str, Any]] = []
     mass_rows: List[Dict[str, Any]] = []
@@ -873,7 +887,7 @@ def main() -> None:
     for n_plants in range(1, N_CASES + 1):
         subset = plants.iloc[:n_plants]
         fuel = aggregate_fuel(subset)
-        out = simulate_case(fuel, thermo_props, debug=False)
+        out = simulate_case(fuel, thermo_props, compression_costs, debug=False)
         replacement = sum_replacement_costs(subset, truck_costs, debug=False)
         central_costs = {
             "capex_sorting_meur": out["capex_sorting_meur"],

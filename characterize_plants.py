@@ -53,6 +53,7 @@ for _, plant in plants_df.iterrows():
     # From energy balance we can calculate the FLH and the total LHV of the fuel:
     rw = 2.5 # [MJ/kg] water evaporation
     eta_boiler = 0.85 # [MWsteam/MWfuel] Assumption from EteknikKompendie p.86, gives range: 0.80-0.92
+     # Also check Danish Energy Agency p.96: Technology data - energy plants for electricity and district heating generation
     Qlhv = Qsteam / eta_boiler 
     FLH = (m_pl*LHV_pl + m_bio*LHV_bio - rw*m_h2o)/3600 / Qlhv # [h/yr]
     LHV_biowet = (LHV_bio*m_bio - rw*m_h2o) / (m_bio + m_h2o) # [MJ/kg ash-free]

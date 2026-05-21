@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import griddata
-from model import get_CoolProp, compression_energy
+from model import compression_capex_eur, get_CoolProp, compression_energy
 
 # Read pre-calculated plant characterization
 plants_clean = pd.read_csv("data/plants_clean.csv")
@@ -134,6 +134,7 @@ QH2 = nH2_s * LHV_H2                    # [MWth]
 PH2 = QH2/eta_electrolyzer              # [MWel] power demand
 
 print(" ")
+print("plant name", plant["Name"])
 print("QH2", QH2, "MWth")
 print("PH2", PH2, "MWel")
 print("E_input", E_input/3600/FLH_gasifier, "MWth")
@@ -224,15 +225,20 @@ def levelize_MEUR_methanol(CAPEX, annual_methanol, dr, lifetime):
     CAPEX_lev = CAPEX_annual / annual_methanol # [EUR/t]
     return CAPEX_lev
 
-CAPEX_sorting_ref = 350 * SEK_to_EUR # [MEUR] @140ktwaste p.a. Brista
-capacity_sorting_ref = 140000 # [t/a]
-capacity_sorting_target = m_tot/1000 # [t/a]
-CAPEX_sorting = CAPEX_sorting_ref * (capacity_sorting_target/capacity_sorting_ref)**k  # [MEUR]
-CAPEX_sorting_lev = levelize_MEUR_methanol(CAPEX_sorting, annual_methanol, dr, lifetime) # [EUR/t]
+CEPCI_SCENARIO = 900  # [-] matches model.py CEPCI_scenario default
+CEPCI_LEGACY = 600  # [-] legacy equipment CAPEX base (model.py CEPCI_reference)
+CEPCI_OPEX_SORTING_REF = 816  # [-] CEPCI 2022, Brista variable sorting OPEX
+CEPCI_SORTING_REF = CEPCI_SCENARIO  # [-] Tekniska Verken quote year 2026
 
-OPEX_fix_sorting = CAPEX_sorting * fixate_CAPEX # [MEUR p.a.]
-OPEX_var_sorting = 200 * SEK_to_EUR # [EUR/twaste] Brista
-OPEX_var_sorting = OPEX_var_sorting * capacity_sorting_target * 10**-6 # [MEUR p.a.]
+CAPEX_sorting_ref = 650 * SEK_to_EUR  # [MEUR] @200 kt waste/a Tekniska Verken at CEPCI_SORTING_REF
+capacity_sorting_ref = 200000  # [t/a]
+capacity_sorting_target = m_tot / 1000  # [t/a]
+CAPEX_sorting = CAPEX_sorting_ref * (capacity_sorting_target / capacity_sorting_ref) ** k  # [MEUR] at CEPCI 2026
+CAPEX_sorting_lev = levelize_MEUR_methanol(CAPEX_sorting, annual_methanol, dr, lifetime)  # [EUR/t]
+
+OPEX_fix_sorting = CAPEX_sorting * fixate_CAPEX  # [MEUR p.a.]
+OPEX_var_sorting = 200 * SEK_to_EUR * (CEPCI_SCENARIO / CEPCI_OPEX_SORTING_REF)  # [EUR/t waste] escalated to CEPCI 2026
+OPEX_var_sorting = OPEX_var_sorting * capacity_sorting_target * 10**-6  # [MEUR p.a.]
 OPEX_sorting_lev = (OPEX_fix_sorting + OPEX_var_sorting) / (annual_methanol * 10**-6) # [EUR/t METHANOL]
 print("\nOPEX_fix_sorting", OPEX_fix_sorting, "MEUR p.a.")
 print("OPEX_var_sorting", OPEX_var_sorting, "MEUR p.a.")
@@ -240,12 +246,13 @@ print("CAPEX_sorting", CAPEX_sorting, "MEUR")
 print("CAPEX_sorting_lev", CAPEX_sorting_lev, "EUR/t METHANOL")
 print("OPEX_sorting_lev", OPEX_sorting_lev, "EUR/t METHANOL")
 
-celc = 50 # [EUR/MWh] 
-CAPEX_gasification_ref = 749729639 * 10**-6 # [MEUR] @237ktMETHANOL p.a. ECOPLANTA, and @70% carbon recovery
-capacity_gasification_ref = 237000 # [t/a]
-capacity_gasification_target = mCH3OH / 1000 # [t/a]
-CAPEX_gasification = CAPEX_gasification_ref * (capacity_gasification_target/capacity_gasification_ref)**k # [MEUR]
-CAPEX_gasification_lev = levelize_MEUR_methanol(CAPEX_gasification, annual_methanol, dr, lifetime) # [EUR/t METHANOL]
+celc = 60  # [EUR/MWh] matches model.py WACCUS_EPR default
+CAPEX_gasification_ref = 749729639 * 10**-6  # [MEUR] @237 kt methanol/a ECOPLANTA @70% carbon recovery at CEPCI_LEGACY
+capacity_gasification_ref = 237000  # [t/a]
+capacity_gasification_target = mCH3OH / 1000  # [t/a]
+CAPEX_gasification_at_ref = CAPEX_gasification_ref * (capacity_gasification_target / capacity_gasification_ref) ** k  # [MEUR]
+CAPEX_gasification = CAPEX_gasification_at_ref * (CEPCI_SCENARIO / CEPCI_LEGACY)  # [MEUR] CEPCI 600→900
+CAPEX_gasification_lev = levelize_MEUR_methanol(CAPEX_gasification, annual_methanol, dr, lifetime)  # [EUR/t METHANOL]
 
 OPEX_fix_gasification = CAPEX_gasification * fixate_CAPEX # [MEUR p.a.]
 OPEX_var_gasification = 1.4 # [EUR/MWhfuel] [Beiron, 2026]
@@ -259,13 +266,20 @@ print("CAPEX_gasification", CAPEX_gasification, "MEUR")
 print("CAPEX_gasification_lev", CAPEX_gasification_lev, "EUR/t METHANOL")
 print("OPEX_gasification_lev", OPEX_gasification_lev, "EUR/t METHANOL")
 
-CAPEXref_H2 = 550 # [kEUR/MWe] [Danish Agency Excel Renewable Fuels AEC100MW]
-CAPEX_H2 = CAPEXref_H2 * PH2 * 10**-3 # [MEUR]
+CAPEXref_H2 = 550  # [kEUR/MWe] [Danish Agency Excel Renewable Fuels AEC100MW]
+CEPCI_adjustment = CEPCI_SCENARIO / CEPCI_LEGACY  # [-] CEPCI 600→900 (same as gasification train)
+compression_costs = pd.read_csv("data/compression_costs.csv")
+
+CAPEX_H2_electrolyzer = CAPEXref_H2 * PH2 * 10**-3 * CEPCI_adjustment # [MEUR]
+CAPEX_comp_H2 = compression_capex_eur(Wcomp_H2, compression_costs) * 10**-6 * CEPCI_adjustment # [MEUR]
+CAPEX_H2 = CAPEX_H2_electrolyzer + CAPEX_comp_H2 # [MEUR] electrolyzer + H2 compression
 CAPEX_H2_lev = levelize_MEUR_methanol(CAPEX_H2, annual_methanol, dr, lifetime) # [EUR/t METHANOL]
-OPEX_fix_H2 = CAPEX_H2 * fixate_CAPEX # [MEUR p.a.]
-OPEX_var_H2 = PH2 * FLH_gasifier * celc * 10**-6 # [MEUR p.a.] 
+OPEX_fix_H2 = CAPEX_H2 * fixate_CAPEX # [MEUR p.a.] fixed OPEX on all H2-block CAPEX
+OPEX_var_H2 = PH2 * FLH_gasifier * celc * 10**-6 # [MEUR p.a.] electrolyzer electricity only
 OPEX_H2_lev = (OPEX_fix_H2 + OPEX_var_H2) / (annual_methanol * 10**-6) # [EUR/t METHANOL]
-print("\nOPEX_fix_H2", OPEX_fix_H2, "MEUR p.a.")
+print("\nCAPEX_H2_electrolyzer", CAPEX_H2_electrolyzer, "MEUR")
+print("CAPEX_comp_H2", CAPEX_comp_H2, "MEUR")
+print("OPEX_fix_H2", OPEX_fix_H2, "MEUR p.a.")
 print("OPEX_var_H2", OPEX_var_H2, "MEUR p.a.")
 print("CAPEX_H2", CAPEX_H2, "MEUR")
 print("CAPEX_H2_lev", CAPEX_H2_lev, "EUR/t METHANOL")
@@ -331,16 +345,16 @@ print("\nTruck transport:", truck_cost_eur_per_t, "EUR/t waste")
 print("  (mass", waste_mass_t_per_yr, "t/a,", plant_distance_km, "km)")
 print("Truck cost lev:", truck_cost_lev, "EUR/t METHANOL")
 
-FLH = plant["FLH"] # [h/yr]
-COP = 2.5 # [-] COP of the heat pump
-CAPEX_HP = 0.86 # [MEUR/MWth] [Bergander & Hellander, 2024]
-# heat_lost = (plant["Qdh"] + plant["Qfgc"]) * FLH # [MWh/yr]
-# power_lost = plant["P"] * FLH # [MWh/yr]
-Qlost = plant["Qdh"] + plant["Qfgc"] # [MWth]
-Plost = plant["P"] # [MWel]
-print(Qlost+Plost, plant["Qlhv"], plant["Qwaste"])
-Whp = Qlost / COP # [MWel]
-CAPEX_HP = CAPEX_HP * Qlost # [MEUR]
+FLH = plant["FLH"]  # [h/yr]
+COP = 3  # [-] matches model.py WACCUS_EPR default
+CEPCI_HP_2022 = 816  # [-] CEPCI base year for HP CAPEX (Bergander)
+CEPCI_HP_2026 = 900  # [-] matches model.py CEPCI_scenario default
+CAPEX_HP_REF_MEUR_PER_MWTH = 0.86  # [MEUR/MWth] [Bergander & Hellander, 2024]
+Qlost = plant["Qdh"] + plant["Qfgc"]  # [MWth]
+Plost = plant["P"]  # [MWel]
+print(Qlost + Plost, plant["Qlhv"], plant["Qwaste"])
+Whp = Qlost / COP  # [MWel]
+CAPEX_HP = CAPEX_HP_REF_MEUR_PER_MWTH * Qlost * (CEPCI_HP_2026 / CEPCI_HP_2022)  # [MEUR]
 CAPEX_HP_lev = levelize_MEUR_methanol(CAPEX_HP, annual_methanol, dr, lifetime) # [EUR/t METHANOL]
 OPEX_fix_HP = CAPEX_HP * fixate_CAPEX # [MEUR p.a.]
 OPEX_HP = (Whp + Plost) * FLH * celc * 10**-6 + OPEX_fix_HP # [MEUR p.a.]
