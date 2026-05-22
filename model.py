@@ -259,6 +259,7 @@ def plan_CCS(plant, c, x, l):
         P -= Whp  # negative P means grid power needed
     Ppenalty = (P_old - P) * FLH  # [MWh/yr]
     Qpenalty = (Q_heat_target - Q_delivered) * FLH  # [MWh/yr]
+    Pnew_capacity = P_old - P  # [MWel] rated new electrical equipment
 
     # Estimate CAPEX and on-site OPEX
     CEPCI_adjustment = x["CEPCI_scenario"] / c["CEPCI_reference"]
@@ -351,7 +352,7 @@ def plan_CCS(plant, c, x, l):
         "shipping_cost": shipping_cost,
         "storage_cost": x["storage_cost"],
     }
-    return strike_price, FCCS, BECCS, Ppenalty, Qpenalty, cost_details
+    return strike_price, FCCS, BECCS, Ppenalty, Pnew_capacity, Qpenalty, cost_details
 
 def plan_CCU(plant, c, x, l):
     
@@ -421,6 +422,7 @@ def plan_CCU(plant, c, x, l):
         P -= Whp  # negative P means grid power needed
     Ppenalty = (P_old - P) * FLH  # [MWh/yr] site electricity (incl. recycle compression)
     Qpenalty = (Q_heat_target - Q_delivered) * FLH  # [MWh/yr]
+    Pnew_capacity = P_old - P  # [MWel] rated new electrical equipment
 
     # Estimate CAPEX and OPEX
     annual_methanol_kt = annual_CO2 * 32.0 / 44.0  # [kt methanol/a] from captured CO2 stoichiometry
@@ -518,7 +520,7 @@ def plan_CCU(plant, c, x, l):
             "qrec_available_mwth": float(Qavailable),
         },
     }
-    return strike_price, FCCU, BCCU, Qmethanol, Ppenalty, Qpenalty, cost_details
+    return strike_price, FCCU, BCCU, Qmethanol, Ppenalty, Pnew_capacity, Qpenalty, cost_details
 
 
 @dataclass
@@ -789,6 +791,7 @@ def plan_gasifier(
         "opex_sorting_meur_a": opex_sorting_meur_a,  # [MEUR/a]
         "opex_gasif_meur_a": opex_gasif_meur_a,  # [MEUR/a]
         "opex_h2_meur_a": opex_h2_meur_a,  # [MEUR/a]
+        "p_energy_mwh_yr": power_input_mwel * flh,  # [MWh/yr] hub electrical demand
     }
 
 def plan_replacements(plants_slice: pd.DataFrame, c: dict, x: dict, debug: bool = False) -> Dict[str, Any]:
@@ -802,6 +805,9 @@ def plan_replacements(plants_slice: pd.DataFrame, c: dict, x: dict, debug: bool 
     opex_hp_meur = 0.0
     opex_fix_hp_meur = 0.0
     opex_var_hp_meur = 0.0
+    p_hp_capacity_mwel = 0.0
+    p_site_deficit_mwel = 0.0
+    p_energy_mwh_yr = 0.0
     per_plant: List[Dict[str, float]] = []
 
     masses = truck_costs_df["mass"].values  # [t/a]
@@ -868,8 +874,13 @@ def plan_replacements(plants_slice: pd.DataFrame, c: dict, x: dict, debug: bool 
             "heat_deficit_mwth": heat_out_mwth,
             "hp_elec_mwel": whp_mwel,
             "power_deficit_mwel": whp_mwel + power_out_mwel,
+            "flh_h": flh_plant,
+            "p_energy_mwh_yr": (whp_mwel + power_out_mwel) * flh_plant,
         }
         per_plant.append(part)
+        p_hp_capacity_mwel += whp_mwel
+        p_site_deficit_mwel += whp_mwel + power_out_mwel
+        p_energy_mwh_yr += part["p_energy_mwh_yr"]
         opex_truck_eur_yr += plant_opex_truck
         capex_hp_meur += plant_capex_hp
         opex_hp_meur += plant_opex_hp
@@ -882,6 +893,9 @@ def plan_replacements(plants_slice: pd.DataFrame, c: dict, x: dict, debug: bool 
         "opex_hp_meur": opex_hp_meur,  # [MEUR/a]
         "opex_fix_hp_meur": opex_fix_hp_meur,  # [MEUR/a]
         "opex_var_hp_meur": opex_var_hp_meur,  # [MEUR/a]
+        "p_hp_capacity_mwel": p_hp_capacity_mwel,  # [MWel]
+        "p_site_deficit_mwel": p_site_deficit_mwel,  # [MWel] HP + lost CHP export at sites
+        "p_energy_mwh_yr": p_energy_mwh_yr,  # [MWh/yr]
         "per_plant": per_plant,
     }
 
@@ -1380,7 +1394,7 @@ def WACCUS_EPR(
     camine = 44,            # [SEK/tCO2] [Ramboll-Malmö, 2023]
     celc = 60,              # [EUR/MWh]
     cheat = 0.75,           # [% of elc]
-    pmethanol = 650,        # [EUR/t] [MSc Omar & Widgren, 2025]
+    pmethanol = 750,        # [EUR/t] [MSc Omar & Widgren, 2025]
 
     shipping_case = "pessimist_1Mt", # The main transport uncertainty! Dictates 1Mt, 2Mt, or 3Mt costs.
     storage = "oygarden",   # ["oygarden", "kalundborg"]
@@ -1530,9 +1544,10 @@ def WACCUS_EPR(
     if EPR_design == "Mitigation":
         bids = []
         for _, plant in plants_df.iterrows():
-            strike_price, FCCS, BECCS, Ppenalty, Qpenalty, cost_details = plan_CCS(plant, c, x, l)
+            strike_price, FCCS, BECCS, Ppenalty, Pnew_capacity, Qpenalty, cost_details = plan_CCS(plant, c, x, l)
             bids.append({"Name": plant["Name"], "Design": EPR_design, "strike_price": strike_price,
-                            "FCCS": FCCS, "BECCS": BECCS, "Ppenalty": Ppenalty, "Qpenalty": Qpenalty, "cost_details": cost_details})
+                            "FCCS": FCCS, "BECCS": BECCS, "Ppenalty": Ppenalty, "Pnew_capacity": Pnew_capacity,
+                            "Qpenalty": Qpenalty, "cost_details": cost_details})
 
         # Plot cost breakdown for highest and lowest cost_CCS plants
         if plot_results:
@@ -1552,9 +1567,10 @@ def WACCUS_EPR(
     elif EPR_design == "Recovery":
         bids = []
         for _, plant in plants_df.iterrows():
-            strike_price, FCCU, BCCU, Qmethanol, Ppenalty, Qpenalty, cost_details = plan_CCU(plant, c, x, l)
+            strike_price, FCCU, BCCU, Qmethanol, Ppenalty, Pnew_capacity, Qpenalty, cost_details = plan_CCU(plant, c, x, l)
             bids.append({"Name": plant["Name"], "Design": EPR_design, "strike_price": strike_price,
-                            "FCCU": FCCU, "BCCU": BCCU, "Ppenalty": Ppenalty, "Qpenalty": Qpenalty, "Qmethanol": Qmethanol, "cost_details": cost_details})
+                            "FCCU": FCCU, "BCCU": BCCU, "Ppenalty": Ppenalty, "Pnew_capacity": Pnew_capacity,
+                            "Qpenalty": Qpenalty, "Qmethanol": Qmethanol, "cost_details": cost_details})
         
         if plot_results:
             sorted_costs = sorted(bids, key=lambda r: r["cost_details"]["cost_CCU"])
@@ -1680,6 +1696,7 @@ def WACCUS_EPR(
         for case in replacement_cases:
             case["Financed"] = selected_n_plants is not None and case["n_plants"] == selected_n_plants
             case["Subsidized"] = case["Financed"] and case["cost_gap_replacement"] > 0
+        remaining_fund = available_subsidies - sum(case["subsidy_requested_eur_yr"] for case in replacement_cases if case["Subsidized"])
 
     results = {"EPR_design": EPR_design}
     if EPR_design in ("Mitigation", "Recovery"):
@@ -1689,11 +1706,24 @@ def WACCUS_EPR(
 
     # Mass KPIs (energy and economics later)
     KPI1 = 0.0  # [n] CHP plants financed (CCS, CCU retrofit, or replacement)
-    KPI2 = 0.0  # [tCO2f/yr] fossil CO2 captured and STORED  — financed CCS plants
-    KPI3 = 0.0  # [tCO2b/yr] biogenic CO2 captured and STORED— financed CCS plants
-    KPI4 = 0.0  # [tMeOHf/yr] fossil methanol — financed / selected case
-    KPI5 = 0.0  # [tMeOHb/yr] biogenic methanol — financed / selected case
-    KPI6 = 0.0  # [tCO2f/yr] residual fossil CO2 — full fleet
+    KPI2 = 0.0  # [ktCO2f/yr] fossil CO2 captured and STORED  — financed CCS plants
+    KPI3 = 0.0  # [ktCO2b/yr] biogenic CO2 captured and STORED— financed CCS plants
+    KPI4 = 0.0  # [ktMeOHf/yr] fossil methanol — financed / selected case
+    KPI5 = 0.0  # [ktMeOHb/yr] biogenic methanol — financed / selected case
+    KPI6 = 0.0  # [ktC/yr] carbon treated (stored CCS, recovered CCU, or gasified MeOH)
+    KPI7 = 0.0  # [ktCO2f/yr] residual fossil CO2 — full fleet
+    KPI8 = 0.0  # [ktCO2f/yr] fossil CO2 at hub combustor (Replacement only)
+    KPI9 = 0.0  # [ktCO2b/yr] biogenic CO2 at hub combustor (Replacement only)
+
+    KPI10 = 0.0  # [MWe] new power capacity required
+    KPI11 = 0.0  # [TWh/yr] new power required
+
+    KPI12 = plastic_supply / 1e6  # [Mtpl/yr] targeted plastic supply
+    KPI13 = EPR_fee  # [EUR/tpl] EPR fee
+    KPI14 = available_subsidies / 1e6 # [MEUR/yr] available subsidies
+    KPI15 = remaining_fund / 1e6 # [MEUR/yr] remaining subsidies
+    KPI16 = granulate_inc * 100 # [%] granulate price increase
+    KPI17 = products_inc * 100 # [%] products price increase
 
     plants_lookup = c["plants_df"].set_index("Name")
 
@@ -1702,41 +1732,59 @@ def WACCUS_EPR(
             plant = plants_lookup.loc[bid["Name"]]
             fossil_co2_kt_yr = plant["Fossil"] - plant["Total"] * x["carbon_change"]  # [ktCO2f/yr], same as plan_CCS
             if not bid["Financed"]:
-                KPI6 += fossil_co2_kt_yr * 1000.0  # [tCO2f/yr] unabated CHP
+                KPI7 += fossil_co2_kt_yr  # [ktCO2f/yr] unabated CHP
                 continue
             KPI1 += 1
-            KPI2 += bid["FCCS"] * 1000.0
-            KPI3 += bid["BECCS"] * 1000.0
-            KPI6 += fossil_co2_kt_yr * (1.0 - c["capture_rate"]) * 1000.0  # [tCO2f/yr] uncaptured
+            KPI2 += bid["FCCS"] 
+            KPI3 += bid["BECCS"] 
+            KPI7 += fossil_co2_kt_yr * (1.0 - c["capture_rate"])  # [ktCO2f/yr] uncaptured
+            KPI10 += max(0.0, bid["Pnew_capacity"])
+            KPI11 += bid["Ppenalty"] / 1e6  # [TWh/yr]
 
     elif EPR_design == "Recovery":
         for bid in bids:
             plant = plants_lookup.loc[bid["Name"]]
             fossil_co2_kt_yr = plant["Fossil"] - plant["Total"] * x["carbon_change"]  # [ktCO2f/yr], same as plan_CCU
             if not bid["Financed"]:
-                KPI6 += fossil_co2_kt_yr * 1000.0  # [tCO2f/yr] unabated CHP
+                KPI7 += fossil_co2_kt_yr  # [ktCO2f/yr] unabated CHP
                 continue
             KPI1 += 1
-            KPI4 += bid["FCCU"] * 1000.0 * 32.0 / 44.0
-            KPI5 += bid["BCCU"] * 1000.0 * 32.0 / 44.0
-            KPI6 += fossil_co2_kt_yr * (1.0 - c["capture_rate"]) * 1000.0  # [tCO2f/yr] uncaptured
+            KPI4 += bid["FCCU"] * 32.0 / 44.0 # [ktMeOHf/yr] 
+            KPI5 += bid["BCCU"] * 32.0 / 44.0 # [ktMeOHb/yr] 
+            KPI7 += fossil_co2_kt_yr * (1.0 - c["capture_rate"])  # [ktCO2f/yr] uncaptured
+            KPI10 += max(0.0, bid["Pnew_capacity"])
+            KPI11 += bid["Ppenalty"] / 1e6  # [TWh/yr]
 
     elif EPR_design == "Replacement":
         plants_df_kpi = c["plants_df"]
         fossil_adj_kt = plants_df_kpi["Fossil"] - plants_df_kpi["Total"] * x["carbon_change"]
-        KPI6 = fossil_adj_kt.sum() * 1000.0  # [tCO2f/yr] all CHP plants (baseline)
+        KPI7 = fossil_adj_kt.sum()  # [ktCO2f/yr] all CHP plants (baseline)
         selected_case = next((rc for rc in replacement_cases if rc["Financed"]), None)
         if selected_case is not None:
             KPI1 = float(selected_case["n_plants"])
             replaced = selected_case["plants_slice"]
             fossil_adj_replaced_kt = replaced["Fossil"] - replaced["Total"] * x["carbon_change"]
-            KPI6 -= fossil_adj_replaced_kt.sum() * 1000.0  # replaced sites shut down
+            KPI7 -= fossil_adj_replaced_kt.sum()  # replaced sites shut down
             gasifier = selected_case["gasifier"]
             frac_bio = gasifier["frac_bio"]
             annual_methanol_t_yr = gasifier["annual_methanol_t_yr"]
-            KPI4 = annual_methanol_t_yr * (1.0 - frac_bio)
-            KPI5 = annual_methanol_t_yr * frac_bio
-            KPI6 += gasifier["c_combusted_t_yr"] * (1.0 - frac_bio) * 44.0 / 12.0  # [tCO2f/yr] hub combustor
+            KPI4 = annual_methanol_t_yr * (1.0 - frac_bio) / 1000.0 # [ktMeOHf/yr]
+            KPI5 = annual_methanol_t_yr * frac_bio / 1000.0 # [ktMeOHb/yr]
+            combustor_co2_kt_yr = gasifier["c_combusted_t_yr"] * 44.0 / 12.0 / 1000.0  # [ktCO2/yr]
+            KPI7 += combustor_co2_kt_yr * (1.0 - frac_bio)  # [ktCO2f/yr] hub combustor
+            KPI8 = combustor_co2_kt_yr * (1.0 - frac_bio)  # [ktCO2f/yr] hub combustor
+            KPI9 = combustor_co2_kt_yr * frac_bio  # [ktCO2b/yr] hub combustor
+            replacement = selected_case["replacement"]
+            KPI10 = gasifier["power_input_mwel"] + replacement["p_site_deficit_mwel"]
+            KPI11 = (gasifier["p_energy_mwh_yr"] + replacement["p_energy_mwh_yr"]) / 1e6  # [TWh/yr]
+
+    # Carbon treated from stored CO2 (KPI2–3) and methanol (KPI4–5) [ktC/yr]
+    KPI6 = (
+        KPI2 * 12.0 / 44.0
+        + KPI3 * 12.0 / 44.0
+        + KPI4 * 12.0 / 32.0
+        + KPI5 * 12.0 / 32.0
+    )
 
     results["KPI1"] = KPI1
     results["KPI2"] = KPI2
@@ -1744,6 +1792,17 @@ def WACCUS_EPR(
     results["KPI4"] = KPI4
     results["KPI5"] = KPI5
     results["KPI6"] = KPI6
+    results["KPI7"] = KPI7
+    results["KPI8"] = KPI8
+    results["KPI9"] = KPI9
+    results["KPI10"] = KPI10
+    results["KPI11"] = KPI11
+    results["KPI12"] = KPI12
+    results["KPI13"] = KPI13
+    results["KPI14"] = KPI14
+    results["KPI15"] = KPI15
+    results["KPI16"] = KPI16
+    results["KPI17"] = KPI17
     return results
 
 if __name__ == "__main__":
@@ -1765,7 +1824,7 @@ if __name__ == "__main__":
 
     # Run the model
     results = WACCUS_EPR(
-        EPR_design="Replacement", # Mitigation, Recovery, Replacement 
+        EPR_design="Recovery", # Mitigation, Recovery, Replacement 
         ADJUST_CEPCI=False,
         plants_df=plants_df, 
         shipping_costs=shipping_costs,
@@ -1779,9 +1838,17 @@ if __name__ == "__main__":
 
     print("\n----------------------------------------These are the simulation results:----------------------------------------")
     print(
-        f"Mass KPIs: plants financed={results['KPI1']:.0f}, "
-        f"CO2f cap={results['KPI2']:,.0f} t/a, CO2b cap={results['KPI3']:,.0f} t/a, "
-        f"MeOHf={results['KPI4']:,.0f} t/a, MeOHb={results['KPI5']:,.0f} t/a, "
-        f"residual CO2f={results['KPI6']:,.0f} t/a"
+        f"\nKPIs: plants financed={results['KPI1']:.0f}, "
+        f"\nCO2f stored={results['KPI2']:,.0f} kt/a, CO2b stored={results['KPI3']:,.0f} kt/a, "
+        f"MeOHf={results['KPI4']:,.0f} kt/a, MeOHb={results['KPI5']:,.0f} kt/a, "
+        f"carbon treated={results['KPI6']:,.0f} ktC/a, "
+        f"residual CO2f={results['KPI7']:,.0f} kt/a, "
+        f"hub combustor CO2f={results['KPI8']:,.0f} kt/a, hub combustor CO2b={results['KPI9']:,.0f} kt/a, "
+        f"\nnew power capacity={results['KPI10']:,.1f} MWel, new power={results['KPI11']:,.1f} TWh/yr"
+        f"\ntargeted plastic supply={results['KPI12']:,.2f} Mtpl/yr, EPR fee={results['KPI13']:,.0f} EUR/tpl, "
+        f"available subsidies={results['KPI14']:,.0f} MEUR/yr,"
+        f"remaining subsidies={results['KPI15']:,.0f} MEUR/yr,"
+        f"\ngranulate price increase={results['KPI16']:,.0f} %, "
+        f"products price increase={results['KPI17']:,.0f} %"
     )
     plt.show()
