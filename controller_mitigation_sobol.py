@@ -1,17 +1,9 @@
-"""
-EMA open exploration: compare Mitigation / Recovery / Replacement within each scenario.
+"""Sobol sensitivity for WACCUS-EPR Mitigation (EMA + SALib)."""
 
-Per the EMA Workbench, a *scenario* is one draw from uncertainties (including
-EPR_products and EPR_fee). A *policy* is one draw from levers (here: EPR_design).
-With combine='factorial', each policy is evaluated on every scenario, so you can
-compare KPIs across designs under the same parametrization.
-
-See: https://emaworkbench.readthedocs.io/en/latest/indepth_tutorial/open-exploration.html
-"""
-
+import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 from model import WACCUS_EPR, get_CoolProp, shipping_adjustment
-from plot import calculate_regret, plot_regret_by_policy
 from ema_workbench import (
     Model,
     RealParameter,
@@ -22,8 +14,12 @@ from ema_workbench import (
     ema_logging,
     perform_experiments,
 )
+from ema_workbench.em_framework import get_SALib_problem
+from SALib.analyze import sobol
 
-# Load and adjust data (mirrors model.py __main__)
+from plot import KPI_LABELS
+
+# Load and adjust data (mirrors controller.py)
 plants_df = pd.read_csv("data/plants_clean.csv")
 shipping_costs = pd.read_csv("data/shipping_costs.csv")
 truck_costs = pd.read_csv("data/truck_costs.csv")
@@ -38,50 +34,17 @@ shipping_costs[cost_columns] = shipping_costs[cost_columns] * SEK_to_EUR
 truck_costs["EUR/ton"] = truck_costs["SEK/ton"] * SEK_to_EUR
 truck_costs = truck_costs.drop(columns=["SEK/ton"])
 
-POLICY_ORDER = ["Mitigation", "Recovery", "Replacement"]
-
-# Within-scenario regret: add entries as needed (sense "min" = lower KPI is better)
-REGRET_SPECS = {
-    "regret_carbon": {
-        "kpi": "KPI7",
-        "sense": "min",
-        "ylabel": "Regret — residual fossil CO₂ [kt/a]",
-    },
-    "regret_power": {
-        "kpi": "KPI11",
-        "sense": "min",
-        "ylabel": "Regret — new power [TWh/a]",
-    },
-    "regret_prices": {
-        "kpi": "KPI16",
-        "sense": "min",
-        "ylabel": "Regret — granulate price increase [%]",
-    },
-    # Example: higher is better → sense "max"
-    # "regret_plants": {"kpi": "KPI1", "sense": "max", "ylabel": "Regret — plants financed [n]"},
-}
-
 
 def ema_WACCUS_EPR(**kwargs):
-    """EMA entry point: return scalar KPIs only (no bids / replacement_cases)."""
+    """EMA entry point: return scalar KPIs only."""
     results = WACCUS_EPR(**kwargs)
     return {f"KPI{i}": float(results[f"KPI{i}"]) for i in range(1, 18)}
 
 
-def uncertainty_column_names(model):
-    return [p.name for p in model.uncertainties]
-
-
-def add_scenario_ids(df, uncertainty_cols):
-    """Integer id for each unique uncertainty parametrization (policy held out)."""
-    out = df.copy()
-    out["scenario_id"] = out.groupby(uncertainty_cols, dropna=False).ngroup()
-    return out
-
-
-model = Model("WACCUSEPR", function=ema_WACCUS_EPR)
+model = Model("WACCUSEPRMitigationSobol", function=ema_WACCUS_EPR)
 
 model.constants = [
+    Constant("EPR_design", "Mitigation"),
     Constant("plants_df", plants_df),
     Constant("shipping_costs", shipping_costs),
     Constant("truck_costs", truck_costs),
@@ -134,7 +97,7 @@ model.constants = [
     Constant("CEPCI_h2_ref", 600),
 ]
 
-# [X] Uncertainties — deep uncertainty + EPR context (fixed within scenario)
+# Former levers moved here; no policy levers (Sobol on uncertainties only)
 model.uncertainties = [
     CategoricalParameter("EPR_products", [True, False]),
     CategoricalParameter("EPR_fee", [100, 200, 300, 400, 500]),
@@ -176,79 +139,103 @@ model.uncertainties = [
     CategoricalParameter("storage", ["oygarden", "kalundborg"]),
 ]
 
-# [L] Levers — EPR design only (three policies compared within each scenario)
-model.levers = [
-    CategoricalParameter("EPR_design", POLICY_ORDER),
-]
+model.levers = []
 
-# Outcomes — KPIs returned by WACCUS_EPR (see model.py)
-model.outcomes = [
-    ScalarOutcome("KPI1"),   # [n] CHP plants financed / replaced
-    ScalarOutcome("KPI2"),   # [ktCO2f/yr] fossil CO2 stored (Mitigation)
-    ScalarOutcome("KPI3"),   # [ktCO2b/yr] biogenic CO2 stored (Mitigation)
-    ScalarOutcome("KPI4"),   # [ktMeOHf/yr] fossil methanol
-    ScalarOutcome("KPI5"),   # [ktMeOHb/yr] biogenic methanol
-    ScalarOutcome("KPI6"),   # [ktC/yr] carbon treated
-    ScalarOutcome("KPI7"),   # [ktCO2f/yr] residual fossil CO2
-    ScalarOutcome("KPI8"),   # [ktCO2f/yr] hub combustor fossil CO2 (Replacement)
-    ScalarOutcome("KPI9"),   # [ktCO2b/yr] hub combustor biogenic CO2 (Replacement)
-    ScalarOutcome("KPI10"),  # [MWe] new power capacity
-    ScalarOutcome("KPI11"),  # [TWh/yr] new power
-    ScalarOutcome("KPI12"),  # [Mtpl/yr] targeted plastic supply
-    ScalarOutcome("KPI13"),  # [EUR/tpl] EPR fee
-    ScalarOutcome("KPI14"),  # [MEUR/yr] available subsidies
-    ScalarOutcome("KPI15"),  # [MEUR/yr] remaining subsidies
-    ScalarOutcome("KPI16"),  # [%] granulate price increase
-    ScalarOutcome("KPI17"),  # [%] products price increase
-]
+model.outcomes = [ScalarOutcome(f"KPI{i}") for i in range(1, 18)]
+
+SOBOL_KPIS = ["KPI6", "KPI11", "KPI16"]
+
+
+def analyze_sobol(results, ooi, debug=False):
+    """SALib Sobol analysis for one outcome."""
+    _, outcomes = results
+    problem = get_SALib_problem(model.uncertainties)
+    y = outcomes[ooi]
+    if debug:
+        print(f"\nSobol analyze {ooi}: n={len(y)}, D={problem['num_vars']}")
+    sobol_indices = sobol.analyze(problem, y)
+    sobol_stats = pd.DataFrame(
+        {key: sobol_indices[key] for key in ["ST", "ST_conf", "S1", "S1_conf"]},
+        index=problem["names"],
+    )
+    sobol_stats = sobol_stats.sort_values(by="ST", ascending=False)
+    s2 = pd.DataFrame(
+        sobol_indices["S2"], index=problem["names"], columns=problem["names"]
+    )
+    s2_conf = pd.DataFrame(
+        sobol_indices["S2_conf"], index=problem["names"], columns=problem["names"]
+    )
+    return sobol_stats, s2, s2_conf, problem
+
+
+def plot_sobol_stats(sobol_stats, kpi, out_path, debug=False):
+    """Horizontal bar chart of total-order Sobol indices (ST)."""
+    sorted_stats = sobol_stats.sort_values(by="ST", ascending=True)
+    n_params = len(sorted_stats)
+    fig_h = max(6.0, 0.32 * n_params)
+    fig, ax = plt.subplots(figsize=(8, fig_h))
+    y_pos = np.arange(n_params)
+    color = plt.cm.magma(0.65)
+    ax.barh(
+        y_pos,
+        sorted_stats["ST"],
+        xerr=sorted_stats["ST_conf"],
+        color=color,
+        ecolor="0.35",
+        capsize=3,
+        height=0.7,
+    )
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(sorted_stats.index, fontsize=11)
+    ax.set_xlabel("Total Sobol index (ST)", fontsize=12)
+    ax.set_ylabel("Parameter", fontsize=12)
+    kpi_title = KPI_LABELS.get(kpi, kpi)
+    ax.set_title(f"Mitigation — {kpi_title}", fontsize=13)
+    ax.set_xlim(left=0)
+    ax.grid(axis="x", linestyle="--", alpha=0.6)
+    ax.tick_params(labelsize=10)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    if debug:
+        print(f"Saved {out_path}")
+    return fig
+
 
 if __name__ == "__main__":
     ema_logging.log_to_stderr(ema_logging.INFO)
-    n_scenarios = 1000
-    n_policies = len(POLICY_ORDER)  # 3: Mitigation, Recovery, Replacement
+    # Power of 2; total runs ≈ n_scenarios × (2D + 2) for D uncertain parameters
+    n_scenarios = 16
+    n_policies = 0
 
     results = perform_experiments(
         model,
         n_scenarios,
         n_policies,
-        uncertainty_sampling=Samplers.LHS,
-        lever_sampling=Samplers.FF,  # all three EPR_design policies per scenario
-        combine="factorial",
+        uncertainty_sampling=Samplers.SOBOL,
+        lever_sampling=Samplers.SOBOL,
     )
     experiments, outcomes = results
 
-    outcomes_df = pd.DataFrame(outcomes)
-    results_df = pd.concat([experiments.reset_index(drop=True), outcomes_df], axis=1)
+    experiments.to_csv("results/experiments_mitigation_sobol.csv", index=False)
+    pd.DataFrame(outcomes).to_csv("results/outcomes_mitigation_sobol.csv", index=False)
 
-    unc_cols = uncertainty_column_names(model)
-    results_df = add_scenario_ids(results_df, unc_cols)
+    print(f"Completed {len(experiments)} Mitigation Sobol runs.")
 
-    experiments.to_csv("results/experiments.csv", index=False)
-    outcomes_df.to_csv("results/outcomes.csv", index=False)
-    results_df.to_csv("results/results.csv", index=False)
+    for kpi in SOBOL_KPIS:
+        sobol_stats, s2, s2_conf, _ = analyze_sobol(results, kpi, debug=True)
+        print(f"\n--- {kpi} ({KPI_LABELS.get(kpi, kpi)}) — top ST ---")
+        print(sobol_stats.head(10).round(4))
 
-    regret_df = calculate_regret(
-        results_df, REGRET_SPECS, policies=POLICY_ORDER, debug=True
-    )
-    regret_df.to_csv("results/regret_by_policy.csv", index=False)
+        sobol_stats.to_csv(f"results/sobol_stats_mitigation_{kpi}.csv")
+        s2.to_csv(f"results/sobol_s2_mitigation_{kpi}.csv")
+        s2_conf.to_csv(f"results/sobol_s2_conf_mitigation_{kpi}.csv")
 
-    plot_regret_by_policy(
-        regret_df,
-        REGRET_SPECS,
-        out_path="results/regret_by_policy.png",
-        debug=True,
-    )
+        plot_sobol_stats(
+            sobol_stats,
+            kpi,
+            out_path=f"results/sobol_mitigation_{kpi}.png",
+            debug=True,
+        )
 
-    n_exp = len(experiments)
-    print(f"Completed {n_exp} runs ({n_scenarios} scenarios × {n_policies} policies).")
-    print("\nOutcome means (all runs):")
-    print(outcomes_df.mean().round(2).to_string())
-    print("\nMean within-scenario regret by policy:")
-    print(
-        regret_df.groupby("EPR_design")[list(REGRET_SPECS.keys())]
-        .mean()
-        .round(4)
-        .to_string()
-    )
-    print("\nSaved results/results.csv, regret_by_policy.csv, regret_by_policy.png")
-    print("Run plot.py for KPI boxplots.")
+    plt.show()
+    print("Done. Sobol CSVs and figures saved under results/.")
