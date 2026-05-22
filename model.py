@@ -1386,7 +1386,7 @@ def WACCUS_EPR(
     dr = 0.075,                         # [-]
     t = 25,                             # [yr]
     CAPEXref_HP = 860,                  # [kEUR/MWth] = 0.86 MEUR/MWth [Bergander & Hellander, 2024]
-    CAPEXref_H2 = 550,                  # [kEUR/MWe] [Danish Agency Excel Renewable Fuels AEC100MW]
+    CAPEXref_H2 = 2075,                 # [kEUR/MWe] UPDATE: https://observatory.clean-hydrogen.europa.eu/hydrogen-landscape/production-trade-and-cost/electrolyser-cost [Danish Agency Excel Renewable Fuels AEC100MW] 
     CAPEXref_loading = 63000000,        # [SEK*] @150 ktCO2/yr excluding railway track [Koldioxid på tåg, 2024]
     CAPEXref_train = 8610000,           # [EUR*] an oversized train @15 wagons, cost = 4.98 *10**6 + 242*15 *10**3 [MSc Gunnarsson, 2025]
     OPEXfix = 0.05,                     # [-] fixed OPEX as fraction of overnight CAPEX
@@ -1824,7 +1824,7 @@ if __name__ == "__main__":
 
     # Run the model
     results = WACCUS_EPR(
-        EPR_design="Recovery", # Mitigation, Recovery, Replacement 
+        EPR_design="Replacement", # Mitigation, Recovery, Replacement 
         ADJUST_CEPCI=False,
         plants_df=plants_df, 
         shipping_costs=shipping_costs,
