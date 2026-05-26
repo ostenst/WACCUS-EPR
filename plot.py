@@ -333,6 +333,57 @@ def plot_regret_by_policy(
     return fig
 
 
+def plot_replacement_cost_across_scenarios(
+    results_df,
+    out_path="results/replacement_cost_by_scenario.png",
+    policy_col="EPR_design",
+    fee_col="EPR_fee",
+    cost_col="replacement_cost",
+    show=False,
+    debug=False,
+):
+    """Boxplots of subsidized Replacement levelized cost [EUR/t] by EPR fee across scenarios."""
+    sub = results_df.loc[results_df[policy_col] == "Replacement"].copy()
+    sub[cost_col] = pd.to_numeric(sub[cost_col], errors="coerce")
+    sub = sub.dropna(subset=[cost_col])
+    if sub.empty:
+        if debug:
+            print("plot_replacement_cost_across_scenarios: no subsidized Replacement runs")
+        return None
+
+    sub[fee_col] = sub[fee_col].astype(int)
+    fee_levels = [f for f in EPR_FEE_LEVELS if f in sub[fee_col].unique()]
+    if not fee_levels:
+        fee_levels = sorted(sub[fee_col].unique())
+
+    data = [sub.loc[sub[fee_col] == fee, cost_col].values for fee in fee_levels]
+    colors = [FEE_COLORS.get(fee, plt.cm.magma(0.5)) for fee in fee_levels]
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    bp = ax.boxplot(
+        data,
+        tick_labels=[str(f) for f in fee_levels],
+        widths=0.55,
+        patch_artist=True,
+    )
+    _style_boxplot(bp, colors)
+    ax.set_xlabel("EPR fee [EUR/tpl]", fontsize=12)
+    ax.set_ylabel("Levelized cost (EUR/t methanol)", fontsize=12)
+    ax.set_title(
+        "Replacement cost (subsidized case only) across scenarios",
+        fontsize=13,
+    )
+    ax.tick_params(labelsize=11)
+    ax.grid(axis="y", linestyle="--", alpha=0.5)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    if debug:
+        print(f"Saved {out_path} ({len(sub)} subsidized Replacement runs)")
+    if show:
+        plt.show()
+    return fig
+
+
 def plot_all_ema_kpi_figures(results_df, show=True, debug=False):
     """Generate and optionally display all EMA KPI boxplot figures."""
     mass_kpis = [f"KPI{i}" for i in range(1, 10)]
@@ -365,7 +416,9 @@ def plot_all_ema_kpi_figures(results_df, show=True, debug=False):
             debug=debug,
         )
 
-    
+    if "replacement_cost" in results_df.columns:
+        plot_replacement_cost_across_scenarios(results_df, debug=debug)
+
     if show:
         plt.show()
 

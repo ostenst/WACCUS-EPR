@@ -284,15 +284,18 @@ def plan_CCS(plant, c, x, l):
     rail_cost = 0
     shipping_cost = 0
     transport_cost = 0  # [EUR/tCO2]
+    CAPEX_loading_kEUR = 0.0
+    CAPEX_train_kEUR = 0.0
+
     def _mode(val):
         return pd.notna(val) and str(val) != "None"
 
-    def _loading_cost():
-        CAPEX = c["CAPEXref_loading"] * c["SEK_to_EUR"] / 1000 * (annual_CO2 / 150) ** x["k"] * CEPCI_adjustment  # [kEUR]
-        return levelize_kEUR(CAPEX, annual_CO2, x)
+    def _loading_capex_and_lev():
+        capex = c["CAPEXref_loading"] * c["SEK_to_EUR"] / 1000 * (annual_CO2 / 150) ** x["k"] * CEPCI_adjustment  # [kEUR]
+        return capex, levelize_kEUR(capex, annual_CO2, x)
 
     if _mode(plant.get('Truck_distance')):
-        loading_cost = _loading_cost()
+        CAPEX_loading_kEUR, loading_cost = _loading_capex_and_lev()
         distance = float(plant['Truck_distance']) # [km]
         a1, a2 = 0.15, 5.58 
         UC = a1 + a2 / distance # [€/(t*km)]
@@ -305,13 +308,16 @@ def plan_CCS(plant, c, x, l):
         pipeline_cost = UC * distance # [€/tCO2]
 
     if _mode(plant.get('Rail_distance')):
-        loading_cost += _loading_cost()
+        capex_load, lev_load = _loading_capex_and_lev()
+        CAPEX_loading_kEUR += capex_load
+        loading_cost += lev_load
         distance = float(plant['Rail_distance'])       # [km]
         cycle_time = (distance / 60 + 5) * 2           # [h] roundtrip (*2) @ 60 km/h + 5h unload
         capacity = 15 * 60 / cycle_time                # [tCO2/h] @15 wagons, 60 t/wagon
 
         CAPEX_train = c["CAPEXref_train"] * CEPCI_adjustment            # [EUR]
-        CAPEXlev_train = levelize_kEUR(CAPEX_train/1000, annual_CO2, x) # [EUR/tCO2]
+        CAPEX_train_kEUR = CAPEX_train / 1000.0
+        CAPEXlev_train = levelize_kEUR(CAPEX_train_kEUR, annual_CO2, x) # [EUR/tCO2]
         OPEX_train = x["OPEXfix"]*CAPEX_train + 0.0269*(capacity*(distance*2*365)) # [EUR/yr] 1 roundtrip per day is more than enough!
         OPEX_train = OPEX_train / (annual_CO2*1000)                                # [EUR/tCO2]
 
@@ -338,6 +344,10 @@ def plan_CCS(plant, c, x, l):
         x["CRC"] = x["ETS"] # In such cases (~50%), CRCs are assumed integrated into the ETS
     strike_price = cost_CCS - biogenic * x["CRC"]                        # [EUR/tCO2] relative to a fossil ETS reference price
 
+    opex_fix_eur_yr = OPEX_fix * annual_CO2 * 1000.0
+    opex_makeup_eur_yr = OPEX_makeup * annual_CO2 * 1000.0
+    opex_energy_eur_yr = OPEX_energy * annual_CO2 * 1000.0
+
     cost_details = {
         "cost_CCS": cost_CCS,
         "CAPEX_capture_lev": CAPEX_capture_lev,
@@ -351,6 +361,38 @@ def plan_CCS(plant, c, x, l):
         "rail_cost": rail_cost,
         "shipping_cost": shipping_cost,
         "storage_cost": x["storage_cost"],
+        "annual_co2_kt_yr": annual_CO2,
+        "capex_overnight_kEUR": {
+            "capture": CAPEX_capture,
+            "hp": CAPEX_HP,
+            "loading": CAPEX_loading_kEUR,
+            "train": CAPEX_train_kEUR,
+        },
+        "opex_annual_eur_yr": {
+            "fix": opex_fix_eur_yr,
+            "makeup": opex_makeup_eur_yr,
+            "energy": opex_energy_eur_yr,
+            "total": (OPEX * annual_CO2 * 1000.0),
+        },
+        "energy": {
+            "annual_co2_kt_yr": annual_CO2,
+            "p_chp_export_before_mwel": float(P_old),
+            "p_chp_export_after_mwel": float(P),
+            "p_ccs_penalty_mwel": float(P_old - P),
+            "q_heat_target_mwth": float(Q_heat_target),
+            "q_heat_delivered_mwth": float(Q_delivered),
+            "qdh_mwth": float(Qdh_steam_old),
+            "qfgc_mwth": float(plant["Qfgc"]),
+            "qlhv_mwth": float(plant["Qlhv"]),
+            "q_fuel_plot_mwth": float(plant["Qlhv"]) + float(plant["Qfgc"]),
+            "q_boiler_loss_mwth": (1.0 - c["eta_boiler"]) * float(plant["Qlhv"]),
+            "qreb_mwth": float(Qreb),
+            "qrec_hex_mwth": float(Qrec_hex),
+            "pcapture_mwel": float(Pcapture),
+            "pcondition_mwel": float(Pcondition),
+            "whp_mwel": float(Whp),
+            "qhp_out_mwth": float(Whp) * x["COP"],
+        },
     }
     return strike_price, FCCS, BECCS, Ppenalty, Pnew_capacity, Qpenalty, cost_details
 
@@ -1168,6 +1210,173 @@ def plot_replacement_energy_breakdown(
     plt.close(fig)
 
 
+def plot_mitigation_cost_breakdown(
+    plant_name: str,
+    cost_details: Dict[str, Any],
+    out_path: str,
+    debug: bool = False,
+) -> None:
+    """Three-panel CCS cost figure for a single Mitigation plant (EUR/t CO₂)."""
+    capex_k = cost_details["capex_overnight_kEUR"]
+    opex_yr = cost_details["opex_annual_eur_yr"]
+    annual_co2_kt_yr = cost_details["annual_co2_kt_yr"]
+
+    fig, (ax_capex, ax_opex, ax_lev) = plt.subplots(3, 1, figsize=(12, 13))
+
+    capex_items = [
+        ("Capture", "capture"),
+        ("Heat pump", "hp"),
+        ("Loading", "loading"),
+        ("Rail", "train"),
+    ]
+    capex_labels = [lbl for lbl, key in capex_items if capex_k.get(key, 0) > 0]
+    capex_keys = [key for _, key in capex_items if capex_k.get(key, 0) > 0]
+    capex_meur = [capex_k[k] * 1e-3 for k in capex_keys]
+    cx = np.arange(len(capex_labels))
+    ax_capex.bar(cx, capex_meur, color="#4477AA", edgecolor="black", linewidth=0.5)
+    ax_capex.set_ylabel("Overnight CAPEX (MEUR)", fontsize=13)
+    ax_capex.set_title(f"CCS overnight CAPEX — {plant_name}", fontsize=14)
+    ax_capex.set_xticks(cx)
+    ax_capex.set_xticklabels(capex_labels, fontsize=11)
+    ax_capex.grid(axis="y", alpha=0.35)
+    ax_capex.tick_params(axis="y", labelsize=11)
+
+    opex_labels = ["Fixed (5%)", "Amine makeup", "Energy"]
+    opex_keys = ["fix", "makeup", "energy"]
+    opex_meur_a = [opex_yr[k] * 1e-6 for k in opex_keys]
+    ox = np.arange(len(opex_labels))
+    ax_opex.bar(ox, opex_meur_a, color="#228833", edgecolor="black", linewidth=0.5)
+    ax_opex.set_ylabel("Annual OPEX (MEUR/a)", fontsize=13)
+    ax_opex.set_title(f"CCS annual OPEX — {plant_name}", fontsize=14)
+    ax_opex.set_xticks(ox)
+    ax_opex.set_xticklabels(opex_labels, fontsize=11)
+    ax_opex.grid(axis="y", alpha=0.35)
+    ax_opex.tick_params(axis="y", labelsize=11)
+
+    lev_map = [
+        ("Capture\nCAPEX", "CAPEX_capture_lev"),
+        ("HP\nCAPEX", "CAPEX_HP_lev"),
+        ("Fixed\nOPEX", "OPEX_fix"),
+        ("Makeup\nOPEX", "OPEX_makeup"),
+        ("Energy\nOPEX", "OPEX_energy"),
+        ("Loading", "loading_cost"),
+        ("Truck", "truck_cost"),
+        ("Pipeline", "pipeline_cost"),
+        ("Rail", "rail_cost"),
+        ("Shipping", "shipping_cost"),
+        ("Storage", "storage_cost"),
+    ]
+    lev_labels = [lbl for lbl, key in lev_map if cost_details.get(key, 0) > 0]
+    lev_vals = [cost_details[key] for _, key in lev_map if cost_details.get(key, 0) > 0]
+    lev_colors = plt.cm.tab20(np.linspace(0, 0.85, max(len(lev_vals), 1)))
+    lx = range(len(lev_vals))
+    ax_lev.bar(lx, lev_vals, color=lev_colors, edgecolor="black", linewidth=0.6)
+    ax_lev.axhline(
+        cost_details["cost_CCS"], color="gray", linestyle="--", linewidth=1.2,
+        label=f"Total = {cost_details['cost_CCS']:.0f} EUR/t",
+    )
+    ax_lev.set_xticks(list(lx))
+    ax_lev.set_xticklabels(lev_labels, fontsize=10)
+    ax_lev.set_ylabel("Levelized cost (EUR/t CO₂)", fontsize=13)
+    ax_lev.set_title(f"Levelized cost breakdown ({annual_co2_kt_yr:,.0f} kt CO₂/a)", fontsize=14)
+    ax_lev.legend(loc="upper right", fontsize=11)
+    ax_lev.grid(axis="y", alpha=0.35)
+    ax_lev.tick_params(axis="y", labelsize=11)
+
+    fig.suptitle(f"Cost breakdown — Mitigation (CCS) @ {plant_name}", fontsize=15, y=1.01)
+    fig.tight_layout()
+    d = os.path.dirname(out_path)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    fig.savefig(out_path, dpi=120, bbox_inches="tight")
+    if debug:
+        print("plot_mitigation_cost_breakdown saved:", out_path)
+    plt.close(fig)
+
+
+def plot_mitigation_energy_breakdown(
+    plant_name: str,
+    cost_details: Dict[str, Any],
+    eta_boiler: float,
+    out_path: str,
+    debug: bool = False,
+) -> None:
+    """Two-panel CCS energy balance (MW; MWth and MWel on one axis)."""
+    e = cost_details["energy"]
+    c_fuel = "#7B241C"
+    c_heat_1 = "#C0392B"
+    c_heat_2 = "#E74C3C"
+    c_heat_3 = "#F5B7B1"
+    c_pwr_1 = "#1A5276"
+    c_pwr_2 = "#2E86C1"
+    c_pwr_3 = "#85C1E9"
+
+    fig, (ax_site, ax_ccs) = plt.subplots(2, 1, figsize=(12, 10))
+
+    site_labels = [
+        f"Boiler loss\n(before, {100 * (1 - eta_boiler):.0f}%)",
+        "Fuel in\n(before, HHV)",
+        "Heat out\n(before)",
+        "Power out\n(before)",
+        "Heat from HEX\n(after)",
+        "Heat from HP\n(after)",
+        "Power\ndeficit (after)",
+        "Power out\n(after, site)",
+    ]
+    site_vals = [
+        e["q_boiler_loss_mwth"],
+        e["q_fuel_plot_mwth"],
+        e["q_heat_target_mwth"],
+        e["p_chp_export_before_mwel"],
+        e["qrec_hex_mwth"],
+        e["qhp_out_mwth"],
+        e["p_ccs_penalty_mwel"],
+        max(e["p_chp_export_after_mwel"], 0.0),
+    ]
+    sx = np.arange(len(site_labels))
+    site_colors = [c_heat_1, c_fuel, c_heat_2, c_pwr_2, c_heat_3, c_heat_3, c_pwr_3, c_pwr_1]
+    hatch = [""] * 4 + ["///"] * 4
+    ax_site.bar(sx, site_vals, color=site_colors, edgecolor="black", linewidth=0.5, hatch=hatch)
+    ax_site.set_ylabel("Capacity [MW]", fontsize=13)
+    ax_site.set_title(f"CHP site — before retrofit vs with CCS ({plant_name})", fontsize=14)
+    ax_site.set_xticks(sx)
+    ax_site.set_xticklabels(site_labels, fontsize=10)
+    ax_site.grid(axis="y", alpha=0.35)
+    ax_site.tick_params(axis="y", labelsize=11)
+
+    ccs_labels = [
+        "Capture\nreboiler", "Capture\nelec.", "Condition\nelec.", "Heat pump\nelec.",
+    ]
+    ccs_vals = [
+        e["qreb_mwth"],
+        e["pcapture_mwel"],
+        e["pcondition_mwel"],
+        e["whp_mwel"],
+    ]
+    cx = np.arange(len(ccs_labels))
+    ccs_colors = plt.cm.Set2(np.linspace(0, 0.9, len(ccs_labels)))
+    ax_ccs.bar(cx, ccs_vals, color=ccs_colors, edgecolor="black", linewidth=0.5)
+    ax_ccs.set_ylabel("Capacity [MW]", fontsize=13)
+    ax_ccs.set_title("CCS block — thermal and electrical loads", fontsize=14)
+    ax_ccs.set_xticks(cx)
+    ax_ccs.set_xticklabels(ccs_labels, fontsize=10)
+    ax_ccs.grid(axis="y", alpha=0.35)
+    ax_ccs.tick_params(axis="y", labelsize=11)
+
+    fig.suptitle(
+        f"Energy balance — Mitigation (CCS) @ {plant_name} (MW; MWth and MWel on one axis)",
+        fontsize=14, y=1.01,
+    )
+    fig.tight_layout()
+    d = os.path.dirname(out_path)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    fig.savefig(out_path, dpi=120, bbox_inches="tight")
+    if debug:
+        print("plot_mitigation_energy_breakdown saved:", out_path)
+    plt.close(fig)
+
+
 def plot_recovery_cost_breakdown(
     plant_name: str,
     cost_details: Dict[str, Any],
@@ -1392,7 +1601,7 @@ def WACCUS_EPR(
     OPEXfix = 0.05,                     # [-] fixed OPEX as fraction of overnight CAPEX
 
     camine = 44,            # [SEK/tCO2] [Ramboll-Malmö, 2023]
-    celc = 60,              # [EUR/MWh]
+    celc = 50,              # [EUR/MWh]
     cheat = 0.75,           # [% of elc]
     pmethanol = 750,        # [EUR/t] [MSc Omar & Widgren, 2025]
 
@@ -1549,20 +1758,24 @@ def WACCUS_EPR(
                             "FCCS": FCCS, "BECCS": BECCS, "Ppenalty": Ppenalty, "Pnew_capacity": Pnew_capacity,
                             "Qpenalty": Qpenalty, "cost_details": cost_details})
 
-        # Plot cost breakdown for highest and lowest cost_CCS plants
         if plot_results:
-                sorted_costs = sorted(bids, key=lambda r: r["cost_details"]["cost_CCS"])
-                for case in [sorted_costs[0], sorted_costs[-1]]:
-                    details = case["cost_details"]
-                    labels = [k for k, v in details.items() if v > 0]
-                    values = [v for v in details.values() if v > 0]
-
-                    fig, ax = plt.subplots(figsize=(8, 4))
-                    ax.barh(labels, values, color=plt.cm.magma(np.linspace(0.2, 0.8, len(values))))
-                    ax.set_xlabel("Cost [EUR/tCO2]", fontsize=13)
-                    ax.set_title(f"Cost breakdown — {case['Name']}", fontsize=14)
-                    ax.tick_params(labelsize=12)
-                    fig.tight_layout()
+            sorted_costs = sorted(bids, key=lambda r: r["cost_details"]["cost_CCS"])
+            for case in [sorted_costs[0], sorted_costs[-1]]:
+                tag = str(case["Name"]).replace(" ", "_")
+                details = case["cost_details"]
+                plot_mitigation_cost_breakdown(
+                    case["Name"],
+                    details,
+                    out_path=f"results/mitigation_cost_breakdown_{tag}.png",
+                    debug=False,
+                )
+                plot_mitigation_energy_breakdown(
+                    case["Name"],
+                    details,
+                    c["eta_boiler"],
+                    out_path=f"results/mitigation_energy_breakdown_{tag}.png",
+                    debug=False,
+                )
 
     elif EPR_design == "Recovery":
         bids = []
@@ -1724,6 +1937,7 @@ def WACCUS_EPR(
     KPI15 = remaining_fund / 1e6 # [MEUR/yr] remaining subsidies
     KPI16 = granulate_inc * 100 # [%] granulate price increase
     KPI17 = products_inc * 100 # [%] products price increase
+    replacement_cost = float("nan")  # [EUR/t methanol] Replacement levelized cost if subsidized
 
     plants_lookup = c["plants_df"].set_index("Name")
 
@@ -1778,6 +1992,10 @@ def WACCUS_EPR(
             KPI10 = gasifier["power_input_mwel"] + replacement["p_site_deficit_mwel"]
             KPI11 = (gasifier["p_energy_mwh_yr"] + replacement["p_energy_mwh_yr"]) / 1e6  # [TWh/yr]
 
+        subsidized_case = next((rc for rc in replacement_cases if rc.get("Subsidized")), None)
+        if subsidized_case is not None:
+            replacement_cost = float(subsidized_case["levelized"]["eur_t_total"])
+
     # Carbon treated from stored CO2 (KPI2–3) and methanol (KPI4–5) [ktC/yr]
     KPI6 = (
         KPI2 * 12.0 / 44.0
@@ -1803,6 +2021,7 @@ def WACCUS_EPR(
     results["KPI15"] = KPI15
     results["KPI16"] = KPI16
     results["KPI17"] = KPI17
+    results["replacement_cost"] = replacement_cost
     return results
 
 if __name__ == "__main__":
@@ -1824,7 +2043,7 @@ if __name__ == "__main__":
 
     # Run the model
     results = WACCUS_EPR(
-        EPR_design="Replacement", # Mitigation, Recovery, Replacement 
+        EPR_design="Mitigation", # Mitigation, Recovery, Replacement 
         ADJUST_CEPCI=False,
         plants_df=plants_df, 
         shipping_costs=shipping_costs,

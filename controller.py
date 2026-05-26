@@ -11,7 +11,7 @@ See: https://emaworkbench.readthedocs.io/en/latest/indepth_tutorial/open-explora
 
 import pandas as pd
 from model import WACCUS_EPR, get_CoolProp, shipping_adjustment
-from plot import calculate_regret, plot_regret_by_policy
+from plot import calculate_regret, plot_regret_by_policy, plot_replacement_cost_across_scenarios
 from ema_workbench import (
     Model,
     RealParameter,
@@ -63,9 +63,12 @@ REGRET_SPECS = {
 
 
 def ema_WACCUS_EPR(**kwargs):
-    """EMA entry point: return scalar KPIs only (no bids / replacement_cases)."""
+    """EMA entry point: return scalar outcomes only (no bids / replacement_cases)."""
     results = WACCUS_EPR(**kwargs)
-    return {f"KPI{i}": float(results[f"KPI{i}"]) for i in range(1, 18)}
+    out = {f"KPI{i}": float(results[f"KPI{i}"]) for i in range(1, 18)}
+    rc = results.get("replacement_cost", float("nan"))
+    out["replacement_cost"] = float(rc) if pd.notna(rc) else float("nan")
+    return out
 
 
 def uncertainty_column_names(model):
@@ -200,6 +203,7 @@ model.outcomes = [
     ScalarOutcome("KPI15"),  # [MEUR/yr] remaining subsidies
     ScalarOutcome("KPI16"),  # [%] granulate price increase
     ScalarOutcome("KPI17"),  # [%] products price increase
+    ScalarOutcome("replacement_cost"),  # [EUR/t methanol] subsidized Replacement only
 ]
 
 if __name__ == "__main__":
@@ -238,6 +242,7 @@ if __name__ == "__main__":
         out_path="results/regret_by_policy.png",
         debug=True,
     )
+    plot_replacement_cost_across_scenarios(results_df, debug=True)
 
     n_exp = len(experiments)
     print(f"Completed {n_exp} runs ({n_scenarios} scenarios × {n_policies} policies).")
@@ -250,5 +255,10 @@ if __name__ == "__main__":
         .round(4)
         .to_string()
     )
-    print("\nSaved results/results.csv, regret_by_policy.csv, regret_by_policy.png")
-    print("Run plot.py for KPI boxplots.")
+    repl = results_df.loc[
+        results_df["EPR_design"] == "Replacement", "replacement_cost"
+    ].dropna()
+    if len(repl):
+        print(f"\nSubsidized Replacement cost: n={len(repl)}, mean={repl.mean():.1f} EUR/t methanol")
+    print("\nSaved results/results.csv, regret_by_policy.csv, replacement_cost_by_scenario.png")
+    print("Run plot.py for remaining KPI boxplots.")
