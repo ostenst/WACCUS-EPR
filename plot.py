@@ -96,8 +96,7 @@ def plot_kpi_boxplots_by_design(df, kpi_keys, title, out_path, ncols=3, debug=Fa
             data, tick_labels=EPR_DESIGN_ORDER, widths=0.55, patch_artist=True
         )
         _style_boxplot(bp, box_colors)
-        ax.set_title(KPI_LABELS.get(kpi, kpi), fontsize=12)
-        ax.set_ylabel(kpi, fontsize=11)
+        ax.set_ylabel(KPI_LABELS.get(kpi, kpi), fontsize=12)
         ax.tick_params(axis="x", labelsize=10, rotation=15)
         ax.tick_params(axis="y", labelsize=10)
 
@@ -125,33 +124,25 @@ def plot_kpi_boxplots_by_fee(
     n_fee_bins=5,
     debug=False,
 ):
-    """Boxplots of KPIs (y) vs binned EPR_fee (x) for one EPR_design."""
+    """Boxplots of KPIs (y) vs categorical EPR_fee levels for one EPR_design."""
     sub = df.loc[df["EPR_design"] == design].copy()
     if sub.empty:
         return None
 
-    n_unique = sub["EPR_fee"].nunique()
-    n_bins = min(n_fee_bins, max(2, n_unique))
-    try:
-        sub["fee_bin"] = pd.qcut(sub["EPR_fee"], q=n_bins, duplicates="drop")
-    except ValueError:
-        sub["fee_bin"] = pd.cut(sub["EPR_fee"], bins=n_bins)
-
-    bin_order = sorted(sub["fee_bin"].dropna().unique(), key=_fee_bin_midpoint)
-    tick_labels = [f"{int(b.left)}–{int(b.right)}" for b in bin_order]
-    fee_colors = [DESIGN_COLORS[design]] * len(bin_order)
+    fee_levels = sorted(pd.to_numeric(sub["EPR_fee"], errors="coerce").dropna().unique())
+    tick_labels = [str(int(fee)) for fee in fee_levels]
+    fee_colors = [DESIGN_COLORS[design]] * len(fee_levels)
 
     fig, axes = plt.subplots(2, 2, figsize=(10, 8))
     axes = axes.ravel()
     for ax, kpi in zip(axes, kpi_keys):
         data = [
-            sub.loc[sub["fee_bin"] == fee_bin, kpi].dropna().values
-            for fee_bin in bin_order
+            sub.loc[sub["EPR_fee"] == fee, kpi].dropna().values
+            for fee in fee_levels
         ]
         bp = ax.boxplot(data, tick_labels=tick_labels, widths=0.55, patch_artist=True)
         _style_boxplot(bp, fee_colors)
-        ax.set_title(KPI_LABELS.get(kpi, kpi), fontsize=12)
-        ax.set_ylabel(kpi, fontsize=11)
+        ax.set_ylabel(KPI_LABELS.get(kpi, kpi), fontsize=12)
         ax.set_xlabel("EPR fee [EUR/tpl]", fontsize=11)
         ax.tick_params(axis="x", labelsize=10, rotation=20)
         ax.tick_params(axis="y", labelsize=10)
