@@ -24,7 +24,6 @@ DESIGN_SLUG = "replacement"
 
 plants_df = pd.read_csv("data/plants_clean.csv")
 shipping_costs = pd.read_csv("data/shipping_costs.csv")
-truck_costs = pd.read_csv("data/truck_costs.csv")
 compression_costs = pd.read_csv("data/compression_costs.csv")
 thermo_props = get_CoolProp()
 
@@ -33,8 +32,6 @@ NOK_to_EUR = 0.089
 shipping_costs = shipping_adjustment(shipping_costs, scaling=0.67, debug=False)
 cost_columns = [col for col in shipping_costs.columns if col != "distance"]
 shipping_costs[cost_columns] = shipping_costs[cost_columns] * SEK_to_EUR
-truck_costs["EUR/ton"] = truck_costs["SEK/ton"] * SEK_to_EUR
-truck_costs = truck_costs.drop(columns=["SEK/ton"])
 
 
 def ema_WACCUS_EPR(**kwargs):
@@ -48,27 +45,24 @@ model.constants = [
     Constant("EPR_design", EPR_DESIGN),
     Constant("plants_df", plants_df),
     Constant("shipping_costs", shipping_costs),
-    Constant("truck_costs", truck_costs),
     Constant("compression_costs", compression_costs),
     Constant("thermo_props", thermo_props),
     Constant("SEK_to_EUR", SEK_to_EUR),
     Constant("NOK_to_EUR", NOK_to_EUR),
     Constant("profit", 0.10),
     Constant("plot_results", False),
-    Constant("ADJUST_CEPCI", False),
     Constant("CPI2015", 314.21),
     Constant("CPI2025", 417.96),
-    Constant("CAPEXref_capture", 3.7e9 * 0.091 / 1000),
-    Constant("CAPACITY_CAPTURE_REF_KT_PER_YR", 400.0),
-    Constant("CAPEXref_synthesis", 1.8749),
-    Constant("CAPEXref_loading", 63000000),
-    Constant("CAPEXref_train", 8610000),
+    Constant("capex_ref_capture_keur", 3.7e9 * 0.091 / 1000),  # [kEUR]
+    Constant("capacity_ref_capture_kt_per_yr", 400.0),  # [ktCO2/yr]
+    Constant("capex_ref_loading_sek", 63000000),  # [SEK]
+    Constant("capacity_ref_loading_kt_per_yr", 150.0),  # [ktCO2/yr]
     Constant("capture_rate", 0.90),
-    Constant("q_hex", 0.64),
-    Constant("q_electrolyzer", 0.154),
     Constant("eta_is", 0.80),
     Constant("q_synthesis", 0.087),
     Constant("q_distill", 0.20),
+    Constant("ADJUST_CEPCI", True),  # [-]
+    Constant("CEPCI_target", 900),  # [-]
     Constant("CEPCI_reference", 600),
     Constant("CEPCI_capture_reference", 900),
     Constant("CEPCI_HP_reference", 816),
@@ -85,12 +79,10 @@ model.constants = [
     Constant("q_wgs_mj_per_kmol", 43.0),
     Constant("gasified_carbon_fraction", 0.70),
     Constant("eta_boiler", 0.85),
-    Constant("CAPEX_sorting_ref_msek", 650.0),
-    Constant("capacity_sorting_ref_t_per_yr", 200_000.0),
-    Constant("CAPEX_gasification_ref_meur", 749_729_639 * 1e-6),
-    Constant("capacity_gasification_ref_t_per_yr", 237_000.0),
-    Constant("opex_var_sorting_sek_per_t_waste", 200.0),
-    Constant("opex_var_gasification_eur_per_mwh_fuel", 1.4),
+    Constant("capex_ref_sorting_msek", 650.0),  # [MSEK]
+    Constant("capacity_ref_sorting_t_waste_per_yr", 200_000.0),  # [t waste/yr]
+    Constant("capex_ref_gasification_meur", 749_729_639 * 1e-6),  # [MEUR]
+    Constant("capacity_ref_gasification_t_methanol_per_yr", 237_000.0),  # [t methanol/yr]
     Constant("CEPCI_sorting_ref", 900),
     Constant("CEPCI_opex_sorting_ref", 816),
     Constant("CEPCI_gasification_ref", 600),
@@ -111,25 +103,29 @@ model.uncertainties = [
     RealParameter("stringent_products", 0.00, 1.00),
     RealParameter("price_products", 36_000, 56_000),
     RealParameter("q_reb", 2.7, 3.7),
+    RealParameter("q_hex", 0.62, 0.66),  # [MWth/MWreb]
+    RealParameter("q_electrolyzer", 0.150, 0.158),  # [MWth/MWel]
     RealParameter("p_capture", 0.08, 0.12),
     RealParameter("p_condition", 0.30, 0.45),
     RealParameter("COP", 2.5, 3.5),
     RealParameter("eta_electrolyzer", 0.675, 0.725),
-    RealParameter("eta_synthesis", 0.76, 0.82),
     RealParameter("heat_optimism", 0.00, 1.00),
     RealParameter("k", 0.65, 0.69),
-    RealParameter("CEPCI_scenario", 850, 950),
     RealParameter("dr", 0.06, 0.09),
     RealParameter("t", 20, 30),
-    RealParameter("CAPEXref_HP", 800, 920),
-    RealParameter("CAPEXref_H2", 2000, 3000),
-    RealParameter("OPEXfix", 0.02, 0.04),
+    RealParameter("capex_ref_hp_keur_per_mwth", 800, 920),  # [kEUR/MWth]
+    RealParameter("capex_ref_h2_keur_per_mwel", 2000, 3000),  # [kEUR/MWel]
+    RealParameter("capex_ref_train_eur", 8_000_000, 9_000_000),  # [EUR]
+    RealParameter("capex_ref_synthesis_meur", 1.60, 2.00),  # [MEUR]
+    RealParameter("opex_var_sorting_sek_per_t_waste", 190.0, 210.0),  # [SEK/t waste]
+    RealParameter("opex_var_gasification_eur_per_mwh_fuel", 1.35, 1.45),  # [EUR/MWh_fuel]
+    RealParameter("opex_fix", 0.02, 0.04),  # [-]
     RealParameter("camine", 40, 50),
     RealParameter("celc", 30, 100),
     RealParameter("cheat", 0.50, 0.95),
     RealParameter("pmethanol", 550, 850),
     RealParameter("storage_cost", 20, 80),
-    RealParameter("carbon_change", -0.15, 0.15),
+    RealParameter("transport_cost_factor", 0.90, 1.10),  # [-]
     RealParameter("CRC", 50, 250),
     RealParameter("ETS", 50, 250),
     CategoricalParameter(

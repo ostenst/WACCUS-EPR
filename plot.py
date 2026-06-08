@@ -5,7 +5,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 EPR_DESIGN_ORDER = ["Mitigation", "Recovery", "Replacement"]
-EPR_FEE_LEVELS = [100, 200, 300, 400, 500]
+EPR_FEE_LEVELS = [50, 100, 200, 300, 400]
 FEE_SENSITIVITY_KPIS = ["KPI1", "KPI6", "KPI11", "KPI16"]
 
 FEE_COLORS = {

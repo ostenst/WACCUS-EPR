@@ -5,7 +5,6 @@ from typing import Any, Dict, List
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
-from scipy.interpolate import griddata
 import matplotlib.pyplot as plt
 try:
     import searoute as sr
@@ -223,6 +222,17 @@ def levelize_kEUR(CAPEX, annual_mass_kt, x, debug=False):
         print("levelize_kEUR", CAPEX, annual_mass_kt, CAPEX_lev)
     return CAPEX_lev
 
+
+def cepci_adjustment(c, cepci_ref, debug=False):
+    """Escalate overnight costs from ``cepci_ref`` to ``CEPCI_target``; unity if ``ADJUST_CEPCI`` is False."""
+    if not c["ADJUST_CEPCI"]:
+        adj = 1.0
+    else:
+        adj = c["CEPCI_target"] / cepci_ref
+    if debug:
+        print("cepci_adjustment", cepci_ref, "->", adj)
+    return adj
+
 def plan_CCS(plant, c, x, l):
 
     # Burn fuel and capture/condition CO2
@@ -247,7 +257,7 @@ def plan_CCS(plant, c, x, l):
     P = P - Pcapture - Pcondition  # [MWel]
 
     Q_delivered = Qdh_steam_old * (1 - Qreb / Qsteam) + plant["Qfgc"]  # [MWth] Qfgc unaffected by reboiler
-    Qrec_hex = c["q_hex"] * Qreb  # [MWth]
+    Qrec_hex = x["q_hex"] * Qreb  # [MWth]
     Qavailable = Qrec_hex  # [MWth] capture heat recovery
     Qdiff = Q_heat_target - (Q_delivered + Qavailable)  # [MWth]
     Whp = 0
@@ -262,17 +272,17 @@ def plan_CCS(plant, c, x, l):
     Pnew_capacity = P_old - P  # [MWel] rated new electrical equipment
 
     # Estimate CAPEX and on-site OPEX
-    CEPCI_adjustment = x["CEPCI_scenario"] / c["CEPCI_reference"]
-    CEPCI_capture_adjustment = x["CEPCI_scenario"] / c["CEPCI_capture_reference"]
+    CEPCI_adjustment = cepci_adjustment(c, c["CEPCI_reference"])
+    CEPCI_capture_adjustment = cepci_adjustment(c, c["CEPCI_capture_reference"])
     CAPEX_capture = (
-        c["CAPEXref_capture"] * (annual_CO2 / c["CAPACITY_CAPTURE_REF_KT_PER_YR"]) ** x["k"] * CEPCI_capture_adjustment
+        c["capex_ref_capture_keur"] * (annual_CO2 / c["capacity_ref_capture_kt_per_yr"]) ** x["k"] * CEPCI_capture_adjustment
     )  # [kEUR]
     CAPEX_capture_lev = levelize_kEUR(CAPEX_capture, annual_CO2, x) # [EUR/tCO2]
-    CEPCI_HP_adjustment = x["CEPCI_scenario"] / c["CEPCI_HP_reference"]
-    CAPEX_HP = x["CAPEXref_HP"] * Whp * x["COP"] * CEPCI_HP_adjustment  # [kEUR] 0.86 MEUR/MWth ref, CEPCI 2022→scenario
+    CEPCI_HP_adjustment = cepci_adjustment(c, c["CEPCI_HP_reference"])
+    CAPEX_HP = x["capex_ref_hp_keur_per_mwth"] * Whp * x["COP"] * CEPCI_HP_adjustment  # [kEUR] 0.86 MEUR/MWth ref, CEPCI 2022→scenario
     CAPEX_HP_lev = levelize_kEUR(CAPEX_HP, annual_CO2, x)
 
-    OPEX_fix = (CAPEX_capture + CAPEX_HP) * x["OPEXfix"] / annual_CO2  # [EUR/tCO2]
+    OPEX_fix = (CAPEX_capture + CAPEX_HP) * x["opex_fix"] / annual_CO2  # [EUR/tCO2]
     OPEX_makeup = x["camine"] * c['SEK_to_EUR']                                      # [EUR/tCO2]
     OPEX_energy = (Ppenalty*x["celc"] + Qpenalty*x["celc"]*x["cheat"]) / (annual_CO2 * 1000)  # [EUR/tCO2]
     OPEX = OPEX_fix + OPEX_makeup + OPEX_energy   
@@ -291,7 +301,7 @@ def plan_CCS(plant, c, x, l):
         return pd.notna(val) and str(val) != "None"
 
     def _loading_capex_and_lev():
-        capex = c["CAPEXref_loading"] * c["SEK_to_EUR"] / 1000 * (annual_CO2 / 150) ** x["k"] * CEPCI_adjustment  # [kEUR]
+        capex = c["capex_ref_loading_sek"] * c["SEK_to_EUR"] / 1000 * (annual_CO2 / c["capacity_ref_loading_kt_per_yr"]) ** x["k"] * CEPCI_adjustment  # [kEUR]
         return capex, levelize_kEUR(capex, annual_CO2, x)
 
     if _mode(plant.get('Truck_distance')):
@@ -315,10 +325,10 @@ def plan_CCS(plant, c, x, l):
         cycle_time = (distance / 60 + 5) * 2           # [h] roundtrip (*2) @ 60 km/h + 5h unload
         capacity = 15 * 60 / cycle_time                # [tCO2/h] @15 wagons, 60 t/wagon
 
-        CAPEX_train = c["CAPEXref_train"] * CEPCI_adjustment            # [EUR]
+        CAPEX_train = x["capex_ref_train_eur"] * CEPCI_adjustment            # [EUR]
         CAPEX_train_kEUR = CAPEX_train / 1000.0
         CAPEXlev_train = levelize_kEUR(CAPEX_train_kEUR, annual_CO2, x) # [EUR/tCO2]
-        OPEX_train = x["OPEXfix"]*CAPEX_train + 0.0269*(capacity*(distance*2*365)) # [EUR/yr] 1 roundtrip per day is more than enough!
+        OPEX_train = x["opex_fix"]*CAPEX_train + 0.0269*(capacity*(distance*2*365)) # [EUR/yr] 1 roundtrip per day is more than enough!
         OPEX_train = OPEX_train / (annual_CO2*1000)                                # [EUR/tCO2]
 
         rail_cost = CAPEXlev_train + OPEX_train
@@ -331,13 +341,17 @@ def plan_CCS(plant, c, x, l):
         df_ship = c["shipping_costs"].sort_values('distance')
         shipping_cost = float(np.interp(distance, df_ship['distance'].values, df_ship[x["shipping_case"]].values))
 
-    transport_cost = loading_cost + truck_cost + pipeline_cost + rail_cost + shipping_cost
+    transport_factor = x["transport_cost_factor"]  # [-]
+    loading_cost *= transport_factor
+    truck_cost *= transport_factor
+    pipeline_cost *= transport_factor
+    rail_cost *= transport_factor
+    shipping_cost *= transport_factor
+    transport_cost = loading_cost + truck_cost + pipeline_cost + rail_cost + shipping_cost  # [EUR/tCO2]
     cost_CCS = CAPEX_capture_lev + CAPEX_HP_lev + OPEX + transport_cost + x["storage_cost"]  # [EUR/tCO2]
 
     fossil = plant["Fossil"] / plant["Total"]                       # [tfossil/t] 
     biogenic = 1 - fossil                                           # [tbiogenic/t] 
-    fossil -= x["carbon_change"]
-    biogenic += x["carbon_change"]
     FCCS = annual_CO2 * fossil                                # [ktCO2/yr]
     BECCS = annual_CO2 * biogenic                             # [ktCO2/yr]
     if x["CRC"] < x["ETS"]:
@@ -450,8 +464,8 @@ def plan_CCU(plant, c, x, l):
 
     Q_delivered = Qdh_steam_old * (1 - Qreb / Qsteam) + plant["Qfgc"]  # [MWth] Qfgc unaffected by reboiler
     Q_delivered = Q_delivered + sum(Qcool_CO2) + sum(Qcool_H2)  # [MWth] compressor cooling to network
-    Qrec_hex = c["q_hex"] * Qreb  # [MWth]
-    Qrec_elec = c["q_electrolyzer"] * PH2  # [MWth]
+    Qrec_hex = x["q_hex"] * Qreb  # [MWth]
+    Qrec_elec = x["q_electrolyzer"] * PH2  # [MWth]
     Qavailable = Qrec_hex + Qrec_elec * x["heat_optimism"]  # [MWth] assumed "free" heat exchange
     Qdiff = Q_heat_target - (Q_delivered + Qavailable)  # [MWth]
     Whp = 0
@@ -467,29 +481,29 @@ def plan_CCU(plant, c, x, l):
 
     # Estimate CAPEX and OPEX
     annual_methanol_kt = annual_CO2 * 32.0 / 44.0  # [kt methanol/a] from captured CO2 stoichiometry
-    CEPCI_adjustment = x["CEPCI_scenario"] / c["CEPCI_reference"]
-    CEPCI_capture_adjustment = x["CEPCI_scenario"] / c["CEPCI_capture_reference"]
+    CEPCI_adjustment = cepci_adjustment(c, c["CEPCI_reference"])
+    CEPCI_capture_adjustment = cepci_adjustment(c, c["CEPCI_capture_reference"])
     CAPEX_capture = (
-        c["CAPEXref_capture"] * (annual_CO2 / c["CAPACITY_CAPTURE_REF_KT_PER_YR"]) ** x["k"] * CEPCI_capture_adjustment
+        c["capex_ref_capture_keur"] * (annual_CO2 / c["capacity_ref_capture_kt_per_yr"]) ** x["k"] * CEPCI_capture_adjustment
     )  # [kEUR]
     CAPEX_capture_lev = levelize_kEUR(CAPEX_capture, annual_methanol_kt, x)  # [EUR/t methanol]
-    CEPCI_HP_adjustment = x["CEPCI_scenario"] / c["CEPCI_HP_reference"]
-    CAPEX_HP = x["CAPEXref_HP"] * Whp * x["COP"] * CEPCI_HP_adjustment  # [kEUR] 0.86 MEUR/MWth ref, CEPCI 2022→scenario
+    CEPCI_HP_adjustment = cepci_adjustment(c, c["CEPCI_HP_reference"])
+    CAPEX_HP = x["capex_ref_hp_keur_per_mwth"] * Whp * x["COP"] * CEPCI_HP_adjustment  # [kEUR] 0.86 MEUR/MWth ref, CEPCI 2022→scenario
     CAPEX_HP_lev = levelize_kEUR(CAPEX_HP, annual_methanol_kt, x)  # [EUR/t methanol]
 
     CAPEX_comp_CO2 = compression_capex_eur(Wcomp_CO2, c["compression_costs"]) / 1000 * CEPCI_adjustment  # [kEUR]
     CAPEX_comp_CO2_lev = levelize_kEUR(CAPEX_comp_CO2, annual_methanol_kt, x)  # [EUR/t methanol]
     CAPEX_comp_H2 = compression_capex_eur(Wcomp_H2, c["compression_costs"]) / 1000 * CEPCI_adjustment  # [kEUR]
     CAPEX_comp_H2_lev = levelize_kEUR(CAPEX_comp_H2, annual_methanol_kt, x)  # [EUR/t methanol]
-    CAPEX_H2 = x["CAPEXref_H2"] * PH2 * CEPCI_adjustment  # [kEUR]
+    CAPEX_H2 = x["capex_ref_h2_keur_per_mwel"] * PH2 * CEPCI_adjustment  # [kEUR]
     CAPEX_H2_lev = levelize_kEUR(CAPEX_H2, annual_methanol_kt, x)  # [EUR/t methanol]
-    CAPEX_synthesis = c["CAPEXref_synthesis"] * m_methanol ** (-0.315) * 1000 * CEPCI_adjustment  # [kEUR]
+    CAPEX_synthesis = x["capex_ref_synthesis_meur"] * m_methanol ** (-0.315) * 1000 * CEPCI_adjustment  # [kEUR]
     CAPEX_synthesis_lev = levelize_kEUR(CAPEX_synthesis, annual_methanol_kt, x)  # [EUR/t methanol]
 
     CAPEX_total = CAPEX_capture + CAPEX_HP + CAPEX_comp_CO2 + CAPEX_comp_H2 + CAPEX_H2 + CAPEX_synthesis # [kEUR]
     CAPEX_total_lev = CAPEX_capture_lev + CAPEX_HP_lev + CAPEX_comp_CO2_lev + CAPEX_comp_H2_lev + CAPEX_H2_lev + CAPEX_synthesis_lev  # [EUR/t methanol]
 
-    OPEX_fix = (CAPEX_total * x["OPEXfix"]) / annual_methanol_kt  # [EUR/t methanol]
+    OPEX_fix = (CAPEX_total * x["opex_fix"]) / annual_methanol_kt  # [EUR/t methanol]
     OPEX_makeup = x["camine"] * c["SEK_to_EUR"] * 44.0 / 32.0  # [EUR/t methanol] from SEK/tCO2 basis
     OPEX_energy = (Ppenalty * x["celc"] + Qpenalty * x["celc"] * x["cheat"]) / (annual_methanol_kt * 1000)  # [EUR/t methanol]
     OPEX = OPEX_fix + OPEX_makeup + OPEX_energy  # [EUR/t methanol]
@@ -499,8 +513,6 @@ def plan_CCU(plant, c, x, l):
 
     fossil = plant["Fossil"] / plant["Total"]                       # [tfossil/t] 
     biogenic = 1 - fossil                                           # [tbiogenic/t] 
-    fossil -= x["carbon_change"]
-    biogenic += x["carbon_change"]
     FCCU = annual_CO2 * fossil                                # [ktCO2/yr]
     BCCU = annual_CO2 * biogenic                              # [ktCO2/yr]
 
@@ -640,7 +652,6 @@ def plan_gasifier(
     frac_gasify = c["gasified_carbon_fraction"]  # [-]
     frac_combustor_bio = c["frac_combustor_bio"]  # [-] share of combustor C that is biogenic
     frac_energy = c["frac_energy"]  # [-] share of fuel energy ending up in syngas
-    cepci_target = x["CEPCI_scenario"]  # [-]
 
     # Characterize fuels that go to combustor vs. gasifier
     n_c_tot = fuel.n_c_pl + fuel.n_c_bio  # [kmolC/yr] total organic C (fossil+bio)
@@ -693,10 +704,10 @@ def plan_gasifier(
 
     e_product_mj_per_kmol_c = c["LHV_H2_MJ_PER_KMOL"] * n_h2_kmolc + c["LHV_CO_MJ_PER_KMOL"] * n_co_kmolc  # [MJ/kmolC]
     while n_h2_kmolc / n_co_kmolc > 2.0:
-        n_h2_kmolc -= 0.01  # [kmolH2/kmolC] per step
-        n_co_kmolc += 0.01  # [kmolCO/kmolC]
-        n_co2_kmolc -= 0.01  # [kmolCO2/kmolC]
-        n_steam_wgs += 0.01  # [kmolH2O/kmolC]
+        n_h2_kmolc -= 0.005  # [kmolH2/kmolC] per step
+        n_co_kmolc += 0.005  # [kmolCO/kmolC]
+        n_co2_kmolc -= 0.005  # [kmolCO2/kmolC]
+        n_steam_wgs += 0.005  # [kmolH2O/kmolC]
         e_product_mj_per_kmol_c = c["LHV_H2_MJ_PER_KMOL"] * n_h2_kmolc + c["LHV_CO_MJ_PER_KMOL"] * n_co_kmolc
 
     # Check steam balances
@@ -793,30 +804,34 @@ def plan_gasifier(
     annual_methanol_t_yr = m_ch3oh_kg_yr / 1000.0  # [t methanol/a]
     capacity_sorting_t_yr = fuel.m_tot / 1000.0  # [t waste/a]
 
-    capex_sorting_at_ref = c["CAPEX_sorting_ref_meur"] * (
-        capacity_sorting_t_yr / c["capacity_sorting_ref_t_per_yr"]
+    capex_sorting_at_ref = c["capex_ref_sorting_meur"] * (
+        capacity_sorting_t_yr / c["capacity_ref_sorting_t_waste_per_yr"]
     ) ** x["k"]  # [MEUR]
-    capex_sorting_meur = capex_sorting_at_ref * cepci_target / c["CEPCI_sorting_ref"]  # [MEUR]
-    opex_fix_sorting_meur = capex_sorting_meur * x["OPEXfix"]  # [MEUR/a]
-    opex_var_sorting_eur_per_t = c["opex_var_sorting_eur_per_t_waste"] * cepci_target / c["CEPCI_opex_sorting_ref"]
+    capex_sorting_meur = capex_sorting_at_ref * cepci_adjustment(c, c["CEPCI_sorting_ref"])  # [MEUR]
+    opex_fix_sorting_meur = capex_sorting_meur * x["opex_fix"]  # [MEUR/a]
+    opex_var_sorting_eur_per_t = (
+        x["opex_var_sorting_sek_per_t_waste"] * c["SEK_to_EUR"] * cepci_adjustment(c, c["CEPCI_opex_sorting_ref"])
+    )
     opex_var_sorting_meur = opex_var_sorting_eur_per_t * capacity_sorting_t_yr * 1e-6  # [MEUR/a]
     opex_sorting_meur_a = opex_fix_sorting_meur + opex_var_sorting_meur  # [MEUR/a]
 
-    capex_gasif_at_ref = c["CAPEX_gasification_ref_meur"] * (
-        annual_methanol_t_yr / c["capacity_gasification_ref_t_per_yr"]
+    capex_gasif_at_ref = c["capex_ref_gasification_meur"] * (
+        annual_methanol_t_yr / c["capacity_ref_gasification_t_methanol_per_yr"]
     ) ** x["k"]  # [MEUR]
-    capex_gasif_meur = capex_gasif_at_ref * cepci_target / c["CEPCI_gasification_ref"]  # [MEUR]
-    opex_fix_gasif_meur = capex_gasif_meur * x["OPEXfix"]  # [MEUR/a]
-    opex_var_gasif_eur_per_mwh = c["opex_var_gasification_eur_per_mwh_fuel"] * cepci_target / c["CEPCI_opex_gasification_ref"]
+    capex_gasif_meur = capex_gasif_at_ref * cepci_adjustment(c, c["CEPCI_gasification_ref"])  # [MEUR]
+    opex_fix_gasif_meur = capex_gasif_meur * x["opex_fix"]  # [MEUR/a]
+    opex_var_gasif_eur_per_mwh = (
+        x["opex_var_gasification_eur_per_mwh_fuel"] * cepci_adjustment(c, c["CEPCI_opex_gasification_ref"])
+    )
     opex_var_gasif_meur = opex_var_gasif_eur_per_mwh * e_input / 3600.0 * 1e-6  # [MEUR/a]
     opex_energy_gasif_meur = (w_mix_sum + w_h2_sum + w_recycle) * flh * x["celc"] * 1e-6  # [MEUR/a]
     opex_gasif_meur_a = opex_fix_gasif_meur + opex_var_gasif_meur + opex_energy_gasif_meur  # [MEUR/a]
 
-    cepci_h2_adjustment = cepci_target / c["CEPCI_h2_ref"]  # [-]
-    capex_h2_electrolyzer_meur = x["CAPEXref_H2"] * ph2_mwel * 1e-3 * cepci_h2_adjustment  # [MEUR]
+    cepci_h2_adjustment = cepci_adjustment(c, c["CEPCI_h2_ref"])  # [-]
+    capex_h2_electrolyzer_meur = x["capex_ref_h2_keur_per_mwel"] * ph2_mwel * 1e-3 * cepci_h2_adjustment  # [MEUR]
     capex_h2_comp_meur = compression_capex_eur(wcomp_h2, compression_costs_df, debug=debug) * 1e-6 * cepci_h2_adjustment  # [MEUR]
     capex_h2_meur = capex_h2_electrolyzer_meur + capex_h2_comp_meur  # [MEUR]
-    opex_fix_h2_meur = capex_h2_meur * x["OPEXfix"]  # [MEUR/a]
+    opex_fix_h2_meur = capex_h2_meur * x["opex_fix"]  # [MEUR/a]
     opex_var_h2_meur = ph2_mwel * flh * x["celc"] * 1e-6  # [MEUR/a]
     opex_h2_meur_a = opex_fix_h2_meur + opex_var_h2_meur  # [MEUR/a]
 
@@ -862,9 +877,8 @@ def plan_gasifier(
 
 def plan_replacements(plants_slice: pd.DataFrame, c: dict, x: dict, debug: bool = False) -> Dict[str, Any]:
     """Sum per-plant truck haul and heat-pump replacement costs over ``plants_slice``."""
-    truck_costs_df = c["truck_costs"]
-    sek_to_eur = c["SEK_to_EUR"]
-    cepci_hp_adj = x["CEPCI_scenario"] / c["CEPCI_HP_reference"]  # [-]
+    cepci_hp_adj = cepci_adjustment(c, c["CEPCI_HP_reference"])  # [-]
+    a1_truck, a2_truck = 0.15, 5.58  # [EUR/(t·km), EUR/t] same as plan_CCS CO₂ truck (Ouvrey et al., 2024)
 
     opex_truck_eur_yr = 0.0
     capex_hp_meur = 0.0
@@ -876,44 +890,20 @@ def plan_replacements(plants_slice: pd.DataFrame, c: dict, x: dict, debug: bool 
     p_energy_mwh_yr = 0.0
     per_plant: List[Dict[str, float]] = []
 
-    masses = truck_costs_df["mass"].values  # [t/a]
-    distances = truck_costs_df["km"].values  # [km]
-    if "EUR/ton" in truck_costs_df.columns:
-        costs_tab_per_t = truck_costs_df["EUR/ton"].values  # [EUR/t]
-        eur_scale = 1.0
-    else:
-        costs_tab_per_t = truck_costs_df["SEK/ton"].values  # [SEK/t]
-        eur_scale = sek_to_eur
-    truck_points = np.column_stack((masses, distances))
-
     for _, plant_row in plants_slice.iterrows():
         waste_mass_t_per_yr = float(plant_row["m_tot"]) / 1000.0  # [t/a]
         distance_km = float(plant_row["gasification_distance_km"])  # [km]
         flh_plant = float(plant_row["FLH"])  # [h/yr]
 
-        mass_min, mass_max = masses.min(), masses.max()
-        dist_min, dist_max = distances.min(), distances.max()
-        method = (
-            "nearest"
-            if (
-                waste_mass_t_per_yr < mass_min
-                or waste_mass_t_per_yr > mass_max
-                or distance_km < dist_min
-                or distance_km > dist_max
-            )
-            else "linear"
-        )
-        cost_tab_per_t = float(
-            griddata(truck_points, costs_tab_per_t, (waste_mass_t_per_yr, distance_km), method=method)
-        )
-        truck_eur_per_t = cost_tab_per_t * eur_scale  # [EUR/t]
+        uc_truck = a1_truck + a2_truck / distance_km  # [EUR/(t·km)]
+        truck_eur_per_t = uc_truck * distance_km * x["transport_cost_factor"]  # [EUR/t waste]
         plant_opex_truck = waste_mass_t_per_yr * truck_eur_per_t  # [EUR/yr]
 
         q_lost_mwth = float(plant_row["Qdh"]) + float(plant_row["Qfgc"])  # [MWth]
         p_lost_mwel = float(plant_row["P"])  # [MWel]
         whp_mwel = q_lost_mwth / x["COP"]  # [MWel]
-        plant_capex_hp = x["CAPEXref_HP"] * q_lost_mwth / 1000.0 * cepci_hp_adj  # [MEUR] kEUR/MWth → MEUR
-        plant_opex_fix_hp = plant_capex_hp * x["OPEXfix"]  # [MEUR/a]
+        plant_capex_hp = x["capex_ref_hp_keur_per_mwth"] * q_lost_mwth / 1000.0 * cepci_hp_adj  # [MEUR] kEUR/MWth → MEUR
+        plant_opex_fix_hp = plant_capex_hp * x["opex_fix"]  # [MEUR/a]
         plant_opex_var_hp = (whp_mwel + p_lost_mwel) * flh_plant * x["celc"] * 1e-6  # [MEUR/a]
         plant_opex_hp = plant_opex_fix_hp + plant_opex_var_hp  # [MEUR/a]
 
@@ -1569,28 +1559,19 @@ def WACCUS_EPR(
     EPR_design="Recovery", # [Mitigation, Recovery, Replacement]
     plants_df=None, 
     shipping_costs=None,
-    truck_costs=None,          
     compression_costs=None,
     thermo_props=None,    
     SEK_to_EUR=0.091,
-    NOK_to_EUR=0.089,
     profit=0.10,
     plot_results=False,
 
     CPI2015=314.21, # [SCB]
     CPI2025=417.96, # [SCB]
-    CAPEXref_capture = 3.7e9 * 0.091 / 1000,  # [kEUR] @400 ktCO2/yr, Sysav 2026 (3.7 GSEK overnight CAPEX)
-    CAPACITY_CAPTURE_REF_KT_PER_YR = 400.0,  # [ktCO2/yr] Sysav reference plant size
-    CAPEXref_synthesis = 1.8749,         # [MEUR] power function reference [Danish Renewable Fuels PDF, Fig4 p.186]
-
     capture_rate = 0.90,    # [-] 
-    q_hex = 0.64,           # [MWth/MWreb] [Beiron, 2022] assumed heat exhange from capture plant
-    q_electrolyzer = 0.154,   # [MWth/MWel] [AEL tech, Fig2.1 MSc Jacobsson & Palmgren, 2025] OR [Danish Renwable Fuels 100MW AEC]
     eta_is = 0.80,
     CEPCI_reference = 600,  # [-] [University of Manchester, 2025] default ref year for legacy CAPEX refs
     CEPCI_capture_reference = 900,  # [-] Sysav 2026 capture estimate already at CEPCI_2026
     CEPCI_HP_reference = 816,  # [-] CEPCI 2022 base year for heat-pump overnight CAPEX (Bergander)
-    LHV_methanol = 19.8, # [MJ/kg] [Formelsamling]
 
     # [X] Uncertainties
     baseline_granulates = 1258597, # [t/a] [IVL]
@@ -1605,22 +1586,22 @@ def WACCUS_EPR(
     price_products = 46000, # [SEK/tpl] [IVL]
 
     q_reb = 3.5,            # [MJ/kgCO2] [2.5-3.5] [Soroodan, 2026]
+    q_hex = 0.64,           # [MWth/MWreb] [Beiron, 2022] heat recovery from capture reboiler
+    q_electrolyzer = 0.154,  # [MWth/MWel] [Jacobsson & Palmgren, 2025] electrolyzer waste heat
     p_capture = 0.1,        # [MWh/tCO2] [Beiron, 2022]
     p_condition = 0.37,     # [MJ/kgCO2] [Kumar, 2023]
     COP = 3,                # [MWth/MWel]
     eta_electrolyzer = 0.699, # [MWH2/MWel] Table2.1 MSc Jacobsson & Palmgren (2025)
-    eta_synthesis = 0.78,    # [MWmethanol/MWH2+steam]
     heat_optimism = 0.15,    # [-] [0-1.0] [0-100%] optimistic assumption on heat recovery, from condensers at distillation
+    opex_var_sorting_sek_per_t_waste = 200.0,  # [SEK/t waste] Brista basis
+    opex_var_gasification_eur_per_mwh_fuel = 1.4,  # [EUR/MWh_fuel] Beiron 2026
 
     k = 0.67,                           # [-] [Stenström, 2025] assumed economy-of-scale factor
-    CEPCI_scenario = 900,               # [-] [University of Manchester, 2025] applies to reference CAPEX values
     dr = 0.075,                         # [-]
     t = 25,                             # [yr]
-    CAPEXref_HP = 860,                  # [kEUR/MWth] = 0.86 MEUR/MWth [Bergander & Hellander, 2024]
-    CAPEXref_H2 = 2075,                 # [kEUR/MWe] UPDATE: https://observatory.clean-hydrogen.europa.eu/hydrogen-landscape/production-trade-and-cost/electrolyser-cost [Danish Agency Excel Renewable Fuels AEC100MW] 
-    CAPEXref_loading = 63000000,        # [SEK*] @150 ktCO2/yr excluding railway track [Koldioxid på tåg, 2024]
-    CAPEXref_train = 8610000,           # [EUR*] an oversized train @15 wagons, cost = 4.98 *10**6 + 242*15 *10**3 [MSc Gunnarsson, 2025]
-    OPEXfix = 0.05,                     # [-] fixed OPEX as fraction of overnight CAPEX
+    opex_fix = 0.05,                     # [-] fixed OPEX as fraction of overnight CAPEX
+    capex_ref_train_eur = 8610000,  # [EUR] fixed train @ 15 wagons × 60 t/wagon [Gunnarsson, 2025]
+    capex_ref_synthesis_meur = 1.8749,  # [MEUR] synthesis CAPEX ∝ (m_methanol [t/d])^-0.315 [Danish Renewable Fuels]
 
     camine = 44,            # [SEK/tCO2] [Ramboll-Malmö, 2023]
     celc = 50,              # [EUR/MWh]
@@ -1630,15 +1611,14 @@ def WACCUS_EPR(
     shipping_case = "pessimist_1Mt", # The main transport uncertainty! Dictates 1Mt, 2Mt, or 3Mt costs.
     storage = "oygarden",   # ["oygarden", "kalundborg"]
     storage_cost = 20, # [EUR/tCO2]
+    transport_cost_factor = 1.0,  # [-] scales CCS/replacement transport stack
 
-    carbon_change = 0.10,   # [-] [-0.10,0.10] [Malder, 2023] fraction of biogenic carbon
     CRC = 100,              # [EUR/tCO2]
     ETS = 80,               # [EUR/tCO2] Use this report: The EU-ETS Price Through 2030 and Beyond: A closer look at drivers, models and assumptions (https://www.ecologic.eu/19034)
     
     # [L] Levers
     EPR_products = True,
     EPR_fee = 200, # [EUR/tpl]
-    ADJUST_CEPCI = False,
 
     # Replacement (centralized gasification) — process and cost references
     n_replacement_cases = 10,  # [-] cumulative cases: 1 … n largest plants by m_tot
@@ -1656,50 +1636,44 @@ def WACCUS_EPR(
     frac_energy = 0.70,  # [-] share of fuel energy ending up in syngas
     eta_boiler = 0.85,  # [-] boiler efficiency (plot-only loss bar at replaced sites)
 
-    CAPEX_sorting_ref_msek = 650.0,  # [MSEK] Tekniska Verken @200 kt/a
-    capacity_sorting_ref_t_per_yr = 200_000.0,  # [t waste/a]
-    CAPEX_gasification_ref_meur = 749_729_639 * 1e-6,  # [MEUR] ECOPLANTA @237 kt methanol/a
-    capacity_gasification_ref_t_per_yr = 237_000.0,  # [t methanol/a]
-
-    opex_var_sorting_sek_per_t_waste = 200.0,  # [SEK/t waste] Brista basis
-    opex_var_gasification_eur_per_mwh_fuel = 1.4,  # [EUR/MWh_fuel] Beiron 2026
-    
-    CEPCI_sorting_ref = 900,  # [-] Tekniska Verken quote year (= CEPCI_scenario)
-    CEPCI_opex_sorting_ref = 816,  # [-] Brista OPEX base year (= CEPCI_HP_reference)
-    CEPCI_gasification_ref = 600,  # [-] ECOPLANTA CAPEX base (= CEPCI_reference)
-    CEPCI_opex_gasification_ref = 900,  # [-] Beiron OPEX year (= CEPCI_scenario)
+    ADJUST_CEPCI = True,  # [-] if False, all CEPCI escalation factors are 1.0
+    CEPCI_target = 900,  # [-] [University of Manchester, 2025] cost evaluation year
+    CEPCI_sorting_ref = 900,  # [-] Tekniska Verken quote year
+    CEPCI_opex_sorting_ref = 816,  # [-] Brista OPEX base year
+    CEPCI_gasification_ref = 600,  # [-] ECOPLANTA CAPEX base
+    CEPCI_opex_gasification_ref = 900,  # [-] Beiron OPEX year
     CEPCI_h2_ref = 600,  # [-] electrolyzer / compression CAPEX base
-):
-    if not ADJUST_CEPCI:
-        CEPCI_reference = CEPCI_scenario
-        CEPCI_capture_reference = CEPCI_scenario
-        CEPCI_HP_reference = CEPCI_scenario
-        CEPCI_sorting_ref = CEPCI_scenario
-        CEPCI_opex_sorting_ref = CEPCI_scenario
-        CEPCI_gasification_ref = CEPCI_scenario
-        CEPCI_opex_gasification_ref = CEPCI_scenario
-        CEPCI_h2_ref = CEPCI_scenario
 
+    # Reference CAPEX — specific (× installed MW; no capacity_ref)
+    capex_ref_hp_keur_per_mwth = 860,  # [kEUR/MWth] heat pump [Bergander & Hellander, 2024]
+    capex_ref_h2_keur_per_mwel = 2075,  # [kEUR/MWel] electrolyzer [clean-hydrogen observatory]
+
+    # Reference CAPEX + capacity — overnight cost scales as (capacity / capacity_ref)^k
+    capex_ref_capture_keur = 3.7e9 * 0.091 / 1000,  # [kEUR] capture @ capacity_ref_capture_kt_per_yr
+    capacity_ref_capture_kt_per_yr = 400.0,  # [ktCO2/yr] Sysav 2026 reference
+    capex_ref_loading_sek = 63000000,  # [SEK] loading hub @ capacity_ref_loading_kt_per_yr [Koldioxid på tåg, 2024]
+    capacity_ref_loading_kt_per_yr = 150.0,  # [ktCO2/yr]
+    capex_ref_sorting_msek = 650.0,  # [MSEK] sorting @ capacity_ref_sorting_t_waste_per_yr [Tekniska Verken]
+    capacity_ref_sorting_t_waste_per_yr = 200_000.0,  # [t waste/yr]
+    capex_ref_gasification_meur = 749_729_639 * 1e-6,  # [MEUR] gasification @ capacity_ref_gasification_t_methanol_per_yr [ECOPLANTA]
+    capacity_ref_gasification_t_methanol_per_yr = 237_000.0,  # [t methanol/yr]
+
+):
     # Store parameters in dicts
     c = {
         "plants_df": plants_df,
         "shipping_costs": shipping_costs,
-        "truck_costs": truck_costs,
         "compression_costs": compression_costs,
         "thermo_props": thermo_props,
         "SEK_to_EUR": SEK_to_EUR,
         "profit": profit,
 
-        "CAPEXref_capture": CAPEXref_capture,
-        "CAPACITY_CAPTURE_REF_KT_PER_YR": CAPACITY_CAPTURE_REF_KT_PER_YR,
-        "CAPEXref_loading": CAPEXref_loading,
-        "CAPEXref_train": CAPEXref_train,
-        "CAPEXref_synthesis": CAPEXref_synthesis,
+        "capex_ref_capture_keur": capex_ref_capture_keur,
+        "capacity_ref_capture_kt_per_yr": capacity_ref_capture_kt_per_yr,
+        "capex_ref_loading_sek": capex_ref_loading_sek,
+        "capacity_ref_loading_kt_per_yr": capacity_ref_loading_kt_per_yr,
         "capture_rate": capture_rate,
-        "q_hex": q_hex,
-        "q_electrolyzer": q_electrolyzer,
         "eta_is": eta_is,
-        "LHV_methanol": LHV_methanol,
         "LHV_CH3OH": LHV_CH3OH,
 
         "n_replacement_cases": n_replacement_cases,
@@ -1715,14 +1689,14 @@ def WACCUS_EPR(
         "frac_combustor_bio": frac_combustor_bio,
         "frac_energy": frac_energy,
         "eta_boiler": eta_boiler,
-        "CAPEX_sorting_ref_meur": CAPEX_sorting_ref_msek * SEK_to_EUR,  # [MEUR]
-        "capacity_sorting_ref_t_per_yr": capacity_sorting_ref_t_per_yr,
-        "opex_var_sorting_eur_per_t_waste": opex_var_sorting_sek_per_t_waste * SEK_to_EUR,  # [EUR/t]
+        "capex_ref_sorting_meur": capex_ref_sorting_msek * SEK_to_EUR,  # [MEUR]
+        "capacity_ref_sorting_t_waste_per_yr": capacity_ref_sorting_t_waste_per_yr,
 
-        "CAPEX_gasification_ref_meur": CAPEX_gasification_ref_meur,
-        "capacity_gasification_ref_t_per_yr": capacity_gasification_ref_t_per_yr,
-        "opex_var_gasification_eur_per_mwh_fuel": opex_var_gasification_eur_per_mwh_fuel,
+        "capex_ref_gasification_meur": capex_ref_gasification_meur,
+        "capacity_ref_gasification_t_methanol_per_yr": capacity_ref_gasification_t_methanol_per_yr,
 
+        "ADJUST_CEPCI": ADJUST_CEPCI,
+        "CEPCI_target": CEPCI_target,
         "CEPCI_reference": CEPCI_reference,
         "CEPCI_capture_reference": CEPCI_capture_reference,
         "CEPCI_sorting_ref": CEPCI_sorting_ref,
@@ -1734,20 +1708,24 @@ def WACCUS_EPR(
     }
     x = {
         "q_reb": q_reb,
+        "q_hex": q_hex,
+        "q_electrolyzer": q_electrolyzer,
         "p_capture": p_capture,
         "p_condition": p_condition,
         "COP": COP,
         "eta_electrolyzer": eta_electrolyzer,
-        "eta_synthesis": eta_synthesis,
         "heat_optimism": heat_optimism,
+        "opex_var_sorting_sek_per_t_waste": opex_var_sorting_sek_per_t_waste,
+        "opex_var_gasification_eur_per_mwh_fuel": opex_var_gasification_eur_per_mwh_fuel,
 
         "k": k,
-        "CEPCI_scenario": CEPCI_scenario,
         "dr": dr,
         "t": t,
-        "CAPEXref_HP": CAPEXref_HP,
-        "CAPEXref_H2": CAPEXref_H2,
-        "OPEXfix": OPEXfix,
+        "capex_ref_hp_keur_per_mwth": capex_ref_hp_keur_per_mwth,
+        "capex_ref_h2_keur_per_mwel": capex_ref_h2_keur_per_mwel,
+        "capex_ref_train_eur": capex_ref_train_eur,
+        "capex_ref_synthesis_meur": capex_ref_synthesis_meur,
+        "opex_fix": opex_fix,
 
         "camine": camine,
         "celc": celc,
@@ -1757,8 +1735,8 @@ def WACCUS_EPR(
         "shipping_case": shipping_case,
         "storage": storage,
         "storage_cost": storage_cost,
+        "transport_cost_factor": transport_cost_factor,
 
-        "carbon_change": carbon_change,
         "CRC": CRC,
         "ETS": ETS,
     }
@@ -1897,7 +1875,7 @@ def WACCUS_EPR(
 
     elif EPR_design == "Recovery":
         for bid in bids:
-            methanol_mass_t_yr = bid["Qmethanol"] / (c["LHV_methanol"] / 3600) / 1000  # [t/yr]
+            methanol_mass_t_yr = bid["Qmethanol"] / (c["LHV_CH3OH"] / 3600) / 1000  # [t/yr]
             cost_gap_raw = (bid["strike_price"] - x["pmethanol"]) * methanol_mass_t_yr  # [EUR/yr]
             bid["cost_gap_plant"] = max(0.0, cost_gap_raw)  # [EUR/yr] profitable vs market → no subsidy
         remaining_fund = available_subsidies
@@ -1968,7 +1946,7 @@ def WACCUS_EPR(
     if EPR_design == "Mitigation":
         for bid in bids:
             plant = plants_lookup.loc[bid["Name"]]
-            fossil_co2_kt_yr = plant["Fossil"] - plant["Total"] * x["carbon_change"]  # [ktCO2f/yr], same as plan_CCS
+            fossil_co2_kt_yr = plant["Fossil"]  # [ktCO2f/yr]
             if not bid["Financed"]:
                 KPI7 += fossil_co2_kt_yr  # [ktCO2f/yr] unabated CHP
                 continue
@@ -1982,7 +1960,7 @@ def WACCUS_EPR(
     elif EPR_design == "Recovery":
         for bid in bids:
             plant = plants_lookup.loc[bid["Name"]]
-            fossil_co2_kt_yr = plant["Fossil"] - plant["Total"] * x["carbon_change"]  # [ktCO2f/yr], same as plan_CCU
+            fossil_co2_kt_yr = plant["Fossil"]  # [ktCO2f/yr]
             if not bid["Financed"]:
                 KPI7 += fossil_co2_kt_yr  # [ktCO2f/yr] unabated CHP
                 continue
@@ -1995,14 +1973,12 @@ def WACCUS_EPR(
 
     elif EPR_design == "Replacement":
         plants_df_kpi = c["plants_df"]
-        fossil_adj_kt = plants_df_kpi["Fossil"] - plants_df_kpi["Total"] * x["carbon_change"]
-        KPI7 = fossil_adj_kt.sum()  # [ktCO2f/yr] all CHP plants (baseline)
+        KPI7 = plants_df_kpi["Fossil"].sum()  # [ktCO2f/yr] all CHP plants (baseline)
         selected_case = next((rc for rc in replacement_cases if rc["Financed"]), None)
         if selected_case is not None:
             KPI1 = float(selected_case["n_plants"])
             replaced = selected_case["plants_slice"]
-            fossil_adj_replaced_kt = replaced["Fossil"] - replaced["Total"] * x["carbon_change"]
-            KPI7 -= fossil_adj_replaced_kt.sum()  # replaced sites shut down
+            KPI7 -= replaced["Fossil"].sum()  # replaced sites shut down
             gasifier = selected_case["gasifier"]
             annual_methanol_t_yr = gasifier["annual_methanol_t_yr"]
             KPI4 = annual_methanol_t_yr * (1.0 - gasifier["frac_bio_gasifier"]) / 1000.0 # [ktMeOHf/yr]
@@ -2052,7 +2028,6 @@ if __name__ == "__main__":
     # Read data
     plants_df = pd.read_csv('data/plants_clean.csv')
     shipping_costs = pd.read_csv('data/shipping_costs.csv')
-    truck_costs = pd.read_csv('data/truck_costs.csv')
     compression_costs = pd.read_csv('data/compression_costs.csv')
     thermo_props = get_CoolProp()
 
@@ -2061,16 +2036,11 @@ if __name__ == "__main__":
     shipping_costs = shipping_adjustment(shipping_costs, scaling=0.67, debug=False)
     cost_columns = [col for col in shipping_costs.columns if col != 'distance']
     shipping_costs[cost_columns] = shipping_costs[cost_columns] * SEK_to_EUR
-    truck_costs["EUR/ton"] = truck_costs["SEK/ton"] * SEK_to_EUR
-    truck_costs = truck_costs.drop(columns=["SEK/ton"])
-
     # Run the model
     results = WACCUS_EPR(
         EPR_design="Replacement", # Mitigation, Recovery, Replacement 
-        ADJUST_CEPCI=False,
         plants_df=plants_df, 
         shipping_costs=shipping_costs,
-        truck_costs=truck_costs,
         compression_costs=compression_costs,
         thermo_props=thermo_props,    
         SEK_to_EUR=SEK_to_EUR,

@@ -26,18 +26,13 @@ from ema_workbench import (
 # Load and adjust data (mirrors model.py __main__)
 plants_df = pd.read_csv("data/plants_clean.csv")
 shipping_costs = pd.read_csv("data/shipping_costs.csv")
-truck_costs = pd.read_csv("data/truck_costs.csv")
 compression_costs = pd.read_csv("data/compression_costs.csv")
 thermo_props = get_CoolProp()
 
 SEK_to_EUR = 0.091
-NOK_to_EUR = 0.089
 shipping_costs = shipping_adjustment(shipping_costs, scaling=0.67, debug=False)
 cost_columns = [col for col in shipping_costs.columns if col != "distance"]
 shipping_costs[cost_columns] = shipping_costs[cost_columns] * SEK_to_EUR
-truck_costs["EUR/ton"] = truck_costs["SEK/ton"] * SEK_to_EUR
-truck_costs = truck_costs.drop(columns=["SEK/ton"])
-
 POLICY_ORDER = ["Mitigation", "Recovery", "Replacement"]
 
 # Within-scenario regret: add entries as needed (sense "min" = lower KPI is better)
@@ -85,37 +80,28 @@ def add_scenario_ids(df, uncertainty_cols):
 model = Model("WACCUSEPR", function=ema_WACCUS_EPR)
 
 model.constants = [
+    Constant("plot_results", False),
+    Constant("n_replacement_cases", 10),
     Constant("plants_df", plants_df),
     Constant("shipping_costs", shipping_costs),
-    Constant("truck_costs", truck_costs),
     Constant("compression_costs", compression_costs),
     Constant("thermo_props", thermo_props),
+
     Constant("SEK_to_EUR", SEK_to_EUR),
-    Constant("NOK_to_EUR", NOK_to_EUR),
     Constant("profit", 0.10),
-    Constant("plot_results", False),
-    Constant("ADJUST_CEPCI", False),
     Constant("CPI2015", 314.21),
     Constant("CPI2025", 417.96),
-    Constant("CAPEXref_capture", 3.7e9 * 0.091 / 1000),
-    Constant("CAPACITY_CAPTURE_REF_KT_PER_YR", 400.0),
-    Constant("CAPEXref_synthesis", 1.8749),
-    Constant("CAPEXref_loading", 63000000),
-    Constant("CAPEXref_train", 8610000),
+
+    Constant("eta_boiler", 0.85),
     Constant("capture_rate", 0.90),
-    Constant("q_hex", 0.64),
-    Constant("q_electrolyzer", 0.154),
     Constant("eta_is", 0.80),
-    Constant("CEPCI_reference", 600),
-    Constant("CEPCI_capture_reference", 900),
-    Constant("CEPCI_HP_reference", 816),
-    Constant("LHV_methanol", 19.8),
-    Constant("n_replacement_cases", 10),
+    
     Constant("FLH_gasifier", 8000.0),
     Constant("RW_EVAP_MJ_PER_KG", 2.5),
     Constant("LHV_H2_MJ_PER_KMOL", 243.0),
     Constant("LHV_CO_MJ_PER_KMOL", 286.0),
     Constant("LHV_CH3OH", 21.1),
+
     Constant("recycle_ratio", 3.0),
     Constant("n_steam_assumed", 1.0),
     Constant("air_ratio_combustor", 1.2),
@@ -123,13 +109,22 @@ model.constants = [
     Constant("gasified_carbon_fraction", 0.70),
     Constant("frac_combustor_bio", 0.75),
     Constant("frac_energy", 0.70),
-    Constant("eta_boiler", 0.85),
-    Constant("CAPEX_sorting_ref_msek", 650.0),
-    Constant("capacity_sorting_ref_t_per_yr", 200_000.0),
-    Constant("CAPEX_gasification_ref_meur", 749_729_639 * 1e-6),
-    Constant("capacity_gasification_ref_t_per_yr", 237_000.0),
-    Constant("opex_var_sorting_sek_per_t_waste", 200.0),
-    Constant("opex_var_gasification_eur_per_mwh_fuel", 1.4),
+
+    # Reference CAPEX + capacity — scales as (capacity / capacity_ref)^k
+    Constant("capex_ref_capture_keur", 3.7e9 * 0.091 / 1000),  # [kEUR]
+    Constant("capacity_ref_capture_kt_per_yr", 400.0),  # [ktCO2/yr]
+    Constant("capex_ref_loading_sek", 63000000),  # [SEK]
+    Constant("capacity_ref_loading_kt_per_yr", 150.0),  # [ktCO2/yr]
+    Constant("capex_ref_sorting_msek", 650.0),  # [MSEK]
+    Constant("capacity_ref_sorting_t_waste_per_yr", 200_000.0),  # [t waste/yr]
+    Constant("capex_ref_gasification_meur", 749_729_639 * 1e-6),  # [MEUR]
+    Constant("capacity_ref_gasification_t_methanol_per_yr", 237_000.0),  # [t methanol/yr]
+
+    Constant("ADJUST_CEPCI", False),  # [-] escalate overnight CAPEX to CEPCI_target
+    Constant("CEPCI_target", 900),  # [-] cost evaluation year
+    Constant("CEPCI_reference", 600),
+    Constant("CEPCI_capture_reference", 900),
+    Constant("CEPCI_HP_reference", 816),
     Constant("CEPCI_sorting_ref", 900),
     Constant("CEPCI_opex_sorting_ref", 816),
     Constant("CEPCI_gasification_ref", 600),
@@ -140,7 +135,7 @@ model.constants = [
 # [X] Uncertainties — deep uncertainty + EPR context (fixed within scenario)
 model.uncertainties = [
     CategoricalParameter("EPR_products", [True, False]),
-    CategoricalParameter("EPR_fee", [100, 200, 300, 400, 500]),
+    CategoricalParameter("EPR_fee", [50, 100, 200, 300, 400]),
     RealParameter("baseline_granulates", 1_200_000, 1_300_000),
     RealParameter("inc_granulates", 0.00, 0.30),
     RealParameter("shift_granulates", 0.00, 0.40),
@@ -150,33 +145,40 @@ model.uncertainties = [
     RealParameter("shift_products", 0.00, 0.40),
     RealParameter("stringent_products", 0.00, 1.00),
     RealParameter("price_products", 36_000, 56_000),
-    RealParameter("q_reb", 2.7, 3.7),
-    RealParameter("p_capture", 0.08, 0.12),
-    RealParameter("p_condition", 0.30, 0.45),
+
     RealParameter("COP", 2.5, 3.5),
     RealParameter("eta_electrolyzer", 0.675, 0.725),
-    RealParameter("eta_synthesis", 0.76, 0.82),
+    RealParameter("q_reb", 2.7, 3.7),
+    RealParameter("q_hex", 0.62, 0.66),  # [MWth/MWreb]
+    RealParameter("q_electrolyzer", 0.150, 0.158),  # [MWth/MWel]
+    RealParameter("p_capture", 0.08, 0.12),
+    RealParameter("p_condition", 0.30, 0.45),
     RealParameter("heat_optimism", 0.00, 1.00),
-    RealParameter("k", 0.65, 0.69),
-    RealParameter("CEPCI_scenario", 850, 950),
-    RealParameter("dr", 0.06, 0.09),
-    RealParameter("t", 20, 30),
-    RealParameter("CAPEXref_HP", 800, 920),
-    RealParameter("CAPEXref_H2", 2000, 3000),
-    RealParameter("OPEXfix", 0.02, 0.04),
-    RealParameter("camine", 40, 50),
-    RealParameter("celc", 30, 100),
+
+    RealParameter("celc", 30, 70), # SEA Scenarier över Sveriges energisystem
     RealParameter("cheat", 0.50, 0.95),
     RealParameter("pmethanol", 550, 850),
-    RealParameter("storage_cost", 20, 80),
-    RealParameter("carbon_change", -0.15, 0.15),
     RealParameter("CRC", 50, 250),
     RealParameter("ETS", 50, 250),
+    RealParameter("camine", 40, 50),
     CategoricalParameter(
         "shipping_case",
         ["optimist_0.5Mt", "pessimist_0.5Mt", "optimist_1Mt", "pessimist_1Mt"],
     ),
     CategoricalParameter("storage", ["oygarden", "kalundborg"]),
+    RealParameter("storage_cost", 20, 80),
+    RealParameter("transport_cost_factor", 0.90, 1.10),  # [-] CCS + replacement haul transport
+
+    RealParameter("k", 0.62, 0.72),
+    RealParameter("dr", 0.06, 0.09),
+    RealParameter("t", 20, 30),
+    RealParameter("capex_ref_hp_keur_per_mwth", 800, 920),  # [kEUR/MWth]
+    RealParameter("capex_ref_h2_keur_per_mwel", 2000, 3000),  # [kEUR/MWel]
+    RealParameter("capex_ref_train_eur", 8_000_000, 9_000_000),  # [EUR] fixed train @ 15 wagons × 60 t/wagon
+    RealParameter("capex_ref_synthesis_meur", 1.60, 2.00),  # [MEUR] ∝ (m_methanol [t/d])^-0.315
+    RealParameter("opex_var_sorting_sek_per_t_waste", 190.0, 210.0),  # [SEK/t waste]
+    RealParameter("opex_var_gasification_eur_per_mwh_fuel", 1.35, 1.45),  # [EUR/MWh_fuel]
+    RealParameter("opex_fix", 0.02, 0.04),  # [-] fixed OPEX as fraction of overnight CAPEX
 ]
 
 # [L] Levers — EPR design only (three policies compared within each scenario)
@@ -208,7 +210,7 @@ model.outcomes = [
 
 if __name__ == "__main__":
     ema_logging.log_to_stderr(ema_logging.INFO)
-    n_scenarios = 100
+    n_scenarios = 1000
     n_policies = len(POLICY_ORDER)  # 3: Mitigation, Recovery, Replacement
 
     results = perform_experiments(
