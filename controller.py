@@ -106,8 +106,6 @@ model.constants = [
     Constant("q_hex", 0.64),
     Constant("q_electrolyzer", 0.154),
     Constant("eta_is", 0.80),
-    Constant("q_synthesis", 0.087),
-    Constant("q_distill", 0.20),
     Constant("CEPCI_reference", 600),
     Constant("CEPCI_capture_reference", 900),
     Constant("CEPCI_HP_reference", 816),
@@ -123,6 +121,8 @@ model.constants = [
     Constant("air_ratio_combustor", 1.2),
     Constant("q_wgs_mj_per_kmol", 43.0),
     Constant("gasified_carbon_fraction", 0.70),
+    Constant("frac_combustor_bio", 0.75),
+    Constant("frac_energy", 0.70),
     Constant("eta_boiler", 0.85),
     Constant("CAPEX_sorting_ref_msek", 650.0),
     Constant("capacity_sorting_ref_t_per_yr", 200_000.0),
@@ -208,7 +208,7 @@ model.outcomes = [
 
 if __name__ == "__main__":
     ema_logging.log_to_stderr(ema_logging.INFO)
-    n_scenarios = 1000
+    n_scenarios = 100
     n_policies = len(POLICY_ORDER)  # 3: Mitigation, Recovery, Replacement
 
     results = perform_experiments(

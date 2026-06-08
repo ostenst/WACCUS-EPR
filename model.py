@@ -452,7 +452,6 @@ def plan_CCU(plant, c, x, l):
     Q_delivered = Q_delivered + sum(Qcool_CO2) + sum(Qcool_H2)  # [MWth] compressor cooling to network
     Qrec_hex = c["q_hex"] * Qreb  # [MWth]
     Qrec_elec = c["q_electrolyzer"] * PH2  # [MWth]
-    # Qrec_distill = c['q_distill'] * (QH2 + Qsteam_synthesis) # [MWth] NOTE: optimistic assumption on heat recovery, from condensers at distillation
     Qavailable = Qrec_hex + Qrec_elec * x["heat_optimism"]  # [MWth] assumed "free" heat exchange
     Qdiff = Q_heat_target - (Q_delivered + Qavailable)  # [MWth]
     Whp = 0
@@ -639,8 +638,8 @@ def plan_gasifier(
     compression_costs_df = c["compression_costs"]
     flh = c["FLH_gasifier"]  # [h/yr]
     frac_gasify = c["gasified_carbon_fraction"]  # [-]
-    frac_combustor_bio = 0.75 # [-] 75% of the carbon that is combusted is biogenic
-    frac_energy = 0.70 # [-] 70% of energy in initial waste ends up in syngas
+    frac_combustor_bio = c["frac_combustor_bio"]  # [-] share of combustor C that is biogenic
+    frac_energy = c["frac_energy"]  # [-] share of fuel energy ending up in syngas
     cepci_target = x["CEPCI_scenario"]  # [-]
 
     # Characterize fuels that go to combustor vs. gasifier
@@ -1588,8 +1587,6 @@ def WACCUS_EPR(
     q_hex = 0.64,           # [MWth/MWreb] [Beiron, 2022] assumed heat exhange from capture plant
     q_electrolyzer = 0.154,   # [MWth/MWel] [AEL tech, Fig2.1 MSc Jacobsson & Palmgren, 2025] OR [Danish Renwable Fuels 100MW AEC]
     eta_is = 0.80,
-    q_synthesis = 0.087,    # [MWsteam/MWH2] about 0.08/(1-0.08)*QH2 [Danish Renewable Fuels Fig3, section 5.2 Methanol from Hydrogen and Carbon Dioxide]
-    q_distill = 0.20,       # [MWth/MWH2+steam]
     CEPCI_reference = 600,  # [-] [University of Manchester, 2025] default ref year for legacy CAPEX refs
     CEPCI_capture_reference = 900,  # [-] Sysav 2026 capture estimate already at CEPCI_2026
     CEPCI_HP_reference = 816,  # [-] CEPCI 2022 base year for heat-pump overnight CAPEX (Bergander)
@@ -1655,6 +1652,8 @@ def WACCUS_EPR(
     air_ratio_combustor = 1.2,  # [-]
     q_wgs_mj_per_kmol = 43.0,  # [MJ/kmol] WGS thermal term
     gasified_carbon_fraction = 0.70,  # [-] fraction of C to gasifier branch
+    frac_combustor_bio = 0.75,  # [-] share of combustor C that is biogenic
+    frac_energy = 0.70,  # [-] share of fuel energy ending up in syngas
     eta_boiler = 0.85,  # [-] boiler efficiency (plot-only loss bar at replaced sites)
 
     CAPEX_sorting_ref_msek = 650.0,  # [MSEK] Tekniska Verken @200 kt/a
@@ -1699,8 +1698,6 @@ def WACCUS_EPR(
         "capture_rate": capture_rate,
         "q_hex": q_hex,
         "q_electrolyzer": q_electrolyzer,
-        "q_synthesis": q_synthesis,
-        "q_distill": q_distill,
         "eta_is": eta_is,
         "LHV_methanol": LHV_methanol,
         "LHV_CH3OH": LHV_CH3OH,
@@ -1715,6 +1712,8 @@ def WACCUS_EPR(
         "air_ratio_combustor": air_ratio_combustor,
         "q_wgs_mj_per_kmol": q_wgs_mj_per_kmol,
         "gasified_carbon_fraction": gasified_carbon_fraction,
+        "frac_combustor_bio": frac_combustor_bio,
+        "frac_energy": frac_energy,
         "eta_boiler": eta_boiler,
         "CAPEX_sorting_ref_meur": CAPEX_sorting_ref_msek * SEK_to_EUR,  # [MEUR]
         "capacity_sorting_ref_t_per_yr": capacity_sorting_ref_t_per_yr,
