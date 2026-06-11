@@ -380,22 +380,22 @@ def plot_all_ema_kpi_figures(results_df, show=True, debug=False):
     mass_kpis = [f"KPI{i}" for i in range(1, 10)]
     other_kpis = [f"KPI{i}" for i in range(10, 18)]
 
-    plot_kpi_boxplots_by_design(
-        results_df,
-        mass_kpis,
-        title="Mass & carbon KPIs by EPR design",
-        out_path="results/kpi_boxplots_mass_by_design.png",
-        ncols=3,
-        debug=debug,
-    )
-    plot_kpi_boxplots_by_design(
-        results_df,
-        other_kpis,
-        title="Power, policy & economics KPIs by EPR design",
-        out_path="results/kpi_boxplots_policy_by_design.png",
-        ncols=4,
-        debug=debug,
-    )
+    # plot_kpi_boxplots_by_design(
+    #     results_df,
+    #     mass_kpis,
+    #     title="Mass & carbon KPIs by EPR design",
+    #     out_path="results/kpi_boxplots_mass_by_design.png",
+    #     ncols=3,
+    #     debug=debug,
+    # )
+    # plot_kpi_boxplots_by_design(
+    #     results_df,
+    #     other_kpis,
+    #     title="Power, policy & economics KPIs by EPR design",
+    #     out_path="results/kpi_boxplots_policy_by_design.png",
+    #     ncols=4,
+    #     debug=debug,
+    # )
 
     for design in EPR_DESIGN_ORDER:
         slug = design.lower()
