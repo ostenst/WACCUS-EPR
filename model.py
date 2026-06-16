@@ -650,7 +650,7 @@ def plan_gasifier(
     compression_costs_df = c["compression_costs"]
     flh = c["FLH_gasifier"]  # [h/yr]
     frac_gasify = c["gasified_carbon_fraction"]  # [-]
-    frac_combustor_bio = c["frac_combustor_bio"]  # [-] share of combustor C that is biogenic
+    frac_combustor_pl = c["frac_combustor_pl"]  # [-] share of combustor C that is plastic
     frac_energy = c["frac_energy"]  # [-] share of fuel energy ending up in syngas
 
     # Characterize fuels that go to combustor vs. gasifier
@@ -666,7 +666,7 @@ def plan_gasifier(
     o_ratio_bio = fuel.n_o_bio / fuel.n_c_bio # [kmolO/kmolC]
 
     n_c_combustor = n_c_tot * (1 - frac_gasify) # [kmolC/yr]
-    n_c_combustor_bio = n_c_combustor * frac_combustor_bio # [kmolC/yr]
+    n_c_combustor_bio = n_c_combustor * (1 - frac_combustor_pl) # [kmolC/yr]
     n_c_combustor_pl = n_c_combustor - n_c_combustor_bio # [kmolC/yr]
     n_h_combustor = h_ratio_pl*n_c_combustor_pl + h_ratio_bio*n_c_combustor_bio # [kmolH/yr]
     n_o_combustor = o_ratio_pl*n_c_combustor_pl + o_ratio_bio*n_c_combustor_bio # [kmolO/yr]
@@ -719,12 +719,17 @@ def plan_gasifier(
     q_wgs_term = n_steam_wgs * q_wgs  # [MJ/kmolC]
     q_steam_demand_mj_yr = (q_gasify + q_dry + q_wgs_term) * n_c_gasifier  # [MJ/yr]
 
-    # Calculate combustion residuals
+    # Calculate combustion residuals and losses
     q_residual_moisture = c["RW_EVAP_MJ_PER_KG"] * fuel.m_h2o  # [MJ/yr]
     e_combustor = (n_c_combustor_pl*12 + h_ratio_pl*n_c_combustor_pl*1 + o_ratio_pl*n_c_combustor_pl*16) * fuel.lhv_pl # [MJ/yr]
     e_combustor += (n_c_combustor_bio*12 + h_ratio_bio*n_c_combustor_bio*1 + o_ratio_bio*n_c_combustor_bio*16) * fuel.lhv_bio # [MJ/yr]
     q_steam_available = e_combustor - q_residual_moisture  # [MJ/yr]
     n_o2_combustor = n_c_combustor / flh / 3600.0 * c["air_ratio_combustor"]  # [kmolO2/s]
+
+    q_loss_combustor = e_combustor - q_steam_demand_mj_yr # [MJ/yr] loss in combustor, e.g. to evaporate moisture
+    e_gasifier = (n_c_gasifier_pl*12 + h_ratio_pl*n_c_gasifier_pl*1 + o_ratio_pl*n_c_gasifier_pl*16) * fuel.lhv_pl # [MJ/yr]
+    e_gasifier += (n_c_gasifier_bio*12 + h_ratio_bio*n_c_gasifier_bio*1 + o_ratio_bio*n_c_gasifier_bio*16) * fuel.lhv_bio # [MJ/yr]
+    q_loss_gasifier = (e_gasifier + q_steam_demand_mj_yr) - e_product_mj_per_kmol_c*n_c_gasifier # [MJ/yr] 
 
     # Characterize syngas for compression and H2 synthesis
     n_h2o_syngas = n_steam_wgs  # [kmolH2O/kmolC] syngas moisture (shift steam)
@@ -784,6 +789,12 @@ def plan_gasifier(
     power_input_mwel = ph2_mwel + w_mix_sum + w_h2_sum + w_recycle  # [MWel]
     hydrogen_produced_mwth = qh2_mwth  # [MWth]
     steam_mwth = q_steam_demand_mj_yr / 3600.0 / flh  # [MWth]
+
+    q_loss_combustor = q_loss_combustor / 3600.0 / flh # [MWth]
+    q_loss_gasifier = q_loss_gasifier / 3600.0 / flh # [MWth]
+    q_loss_electrolyzer = ph2_mwel - qh2_mwth # [MWth] 
+    q_loss_synthesis = (qh2_mwth + q_syngas_mwth + (w_mix_sum + w_h2_sum + w_recycle)) - qch3oh_s_mwth # [MWth]
+    q_loss_total = q_loss_combustor + q_loss_gasifier + q_loss_electrolyzer + q_loss_synthesis # [MWth]
 
     q_synthesis_input = (
         q_syngas_mwth
@@ -856,6 +867,11 @@ def plan_gasifier(
         "wcomp_h2_mwel": w_h2_sum,  # [MWel]
         "wcomp_recycle_mwel": w_recycle,  # [MWel]
         "power_input_mwel": power_input_mwel,  # [MWel]
+        "q_loss_combustor_mwth": q_loss_combustor,  # [MWth]
+        "q_loss_gasifier_mwth": q_loss_gasifier,  # [MWth]
+        "q_loss_electrolyzer_mwth": q_loss_electrolyzer,  # [MWth]
+        "q_loss_synthesis_mwth": q_loss_synthesis,  # [MWth]
+        "q_loss_total_mwth": q_loss_total,  # [MWth]
         "eta_synthesis": ratio_synthesis,  # [-] Q_meoh / Q_in (mixed units in Q_in)
         "eta_total": eff_total,  # [-] Q_meoh / (fuel_th + power_el)
 
@@ -1135,6 +1151,10 @@ def plot_replacement_energy_breakdown(
     c_pwr_1 = "#1A5276"
     c_pwr_2 = "#2E86C1"
     c_pwr_3 = "#85C1E9"
+    c_loss_combustor = "#922B21"
+    c_loss_gasifier = "#D35400"
+    c_loss_electrolyzer = "#7D6608"
+    c_loss_synthesis = "#566573"
 
     per_plant = replacement["per_plant"]
     names = [p["plant_name"] for p in per_plant]
@@ -1190,16 +1210,51 @@ def plot_replacement_energy_breakdown(
 
     hp_labels = ["Σ heat out\n(HP)", "Σ power deficit\n(HP)", "Σ power deficit\n(site)"]
     hp_vals = [sum_hp_heat, sum_hp_elec, sum_site_pwr]
-    hub_labels = ["Waste fuel input", "Methanol output", "Hub power input"]
-    hub_vals = [hub_out["input_fuel_mwth"], hub_out["methanol_out_mwth"], hub_out["power_input_mwel"]]
+    hub_labels = ["Waste fuel\ninput", "Hub power\ninput", "Methanol\noutput", "Heat losses\n(total)"]
+    hub_vals = [
+        hub_out["input_fuel_mwth"],
+        hub_out["power_input_mwel"],
+        hub_out["methanol_out_mwth"],
+    ]
+    loss_parts = [
+        ("Combustor", hub_out.get("q_loss_combustor_mwth", 0.0)),
+        ("Gasifier", hub_out.get("q_loss_gasifier_mwth", 0.0)),
+        ("Electrolyzer", hub_out.get("q_loss_electrolyzer_mwth", 0.0)),
+        ("Synthesis", hub_out.get("q_loss_synthesis_mwth", 0.0)),
+    ]
+    loss_colors = [c_loss_combustor, c_loss_gasifier, c_loss_electrolyzer, c_loss_synthesis]
 
     x_hp = np.array([0.0, 1.0, 2.0])
     x_hub = np.array([4.5, 5.5, 6.5])
+    x_loss = 7.5
     bar_w = 0.75
     ax_sum.bar(x_hp, hp_vals, bar_w, color=[c_heat_2, c_pwr_2, c_pwr_3], edgecolor="black", linewidth=0.5, hatch="///")
-    ax_sum.bar(x_hub, hub_vals, bar_w, color=[c_fuel, c_heat_1, c_pwr_1], edgecolor="black", linewidth=0.5)
+    ax_sum.bar(
+        x_hub,
+        hub_vals,
+        bar_w,
+        color=[c_fuel, c_pwr_1, c_heat_1],
+        edgecolor="black",
+        linewidth=0.5,
+    )
+    loss_bottom = 0.0
+    for (loss_label, loss_val), loss_color in zip(loss_parts, loss_colors):
+        loss_val = max(0.0, float(loss_val))
+        if loss_val <= 0:
+            continue
+        ax_sum.bar(
+            x_loss,
+            loss_val,
+            bar_w,
+            bottom=loss_bottom,
+            color=loss_color,
+            edgecolor="black",
+            linewidth=0.4,
+            label=loss_label,
+        )
+        loss_bottom += loss_val
     ax_sum.axvline(3.25, color="gray", linestyle=":", linewidth=1.0)
-    ax_sum.set_xticks(list(x_hp) + list(x_hub))
+    ax_sum.set_xticks(list(x_hp) + list(x_hub) + [x_loss])
     ax_sum.set_xticklabels(hp_labels + hub_labels, fontsize=11)
     ax_sum.set_ylabel("Capacity [MW]", fontsize=13)
     ax_sum.set_title(
@@ -1209,6 +1264,15 @@ def plot_replacement_energy_breakdown(
     )
     ax_sum.grid(axis="y", alpha=0.35)
     ax_sum.tick_params(axis="y", labelsize=11)
+    ax_sum.legend(loc="upper right", fontsize=9, title="Hub heat losses", title_fontsize=9)
+
+    if debug:
+        print(
+            "plot_replacement_energy_breakdown hub losses [MWth]:",
+            {label: val for label, val in loss_parts},
+            "total",
+            hub_out.get("q_loss_total_mwth", loss_bottom),
+        )
 
     fig.suptitle(
         f"Energy balance — {n_plants} plant(s) replaced (MW; MWth and MWel on one axis)",
@@ -1632,7 +1696,7 @@ def WACCUS_EPR(
     air_ratio_combustor = 1.2,  # [-]
     q_wgs_mj_per_kmol = 43.0,  # [MJ/kmol] WGS thermal term
     gasified_carbon_fraction = 0.70,  # [-] fraction of C to gasifier branch
-    frac_combustor_bio = 0.75,  # [-] share of combustor C that is biogenic
+    frac_combustor_pl = 0.25,  # [-] share of combustor C that is biogenic
     frac_energy = 0.70,  # [-] share of fuel energy ending up in syngas
     eta_boiler = 0.85,  # [-] boiler efficiency (plot-only loss bar at replaced sites)
 
@@ -1686,7 +1750,7 @@ def WACCUS_EPR(
         "air_ratio_combustor": air_ratio_combustor,
         "q_wgs_mj_per_kmol": q_wgs_mj_per_kmol,
         "gasified_carbon_fraction": gasified_carbon_fraction,
-        "frac_combustor_bio": frac_combustor_bio,
+        "frac_combustor_pl": frac_combustor_pl,
         "frac_energy": frac_energy,
         "eta_boiler": eta_boiler,
         "capex_ref_sorting_meur": capex_ref_sorting_msek * SEK_to_EUR,  # [MEUR]

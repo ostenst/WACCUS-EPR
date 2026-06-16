@@ -107,7 +107,7 @@ model.constants = [
     Constant("air_ratio_combustor", 1.2),
     Constant("q_wgs_mj_per_kmol", 43.0),
     Constant("gasified_carbon_fraction", 0.70),
-    Constant("frac_combustor_bio", 0.75),
+    Constant("frac_combustor_pl", 0.25),
     Constant("frac_energy", 0.70),
 
     # Reference CAPEX + capacity — scales as (capacity / capacity_ref)^k
