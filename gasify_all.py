@@ -63,8 +63,8 @@ N_STEAM_ASSUMED = 1.0  # [kmolH2O/kmolC] steam moles assumed in gasification ste
 AIR_RATIO_COMBUSTOR = 1.2  # [-] excess air for O2 demand to combustor
 Q_WGS_MJ_PER_KMOL = 43.0  # [MJ/kmol] WGS thermal term (gasification.py)
 GASIFIED_CARBON_FRACTION = 0.70  # [-] fraction of C to gasifier branch (model.py)
-FRAC_COMBUSTOR_BIO = 0.75  # [-] share of combustor C that is biogenic (model.py)
-FRAC_ENERGY = 0.70  # [-] share of fuel energy ending up in syngas (model.py)
+FRAC_COMBUSTOR_PL = 0.25  # [-] share of combustor C that is biogenic (model.py)
+FRAC_ENERGY = 0.60  # [-] share of fuel energy ending up in methanol (pre-hydrogenation!)
 LHV_CH3OH_MJ_PER_KG = 21.1  # [MJ/kg]
 
 N_CASES = 10  # [-] number of cumulative plant-count scenarios (largest … 10th largest)
@@ -324,7 +324,7 @@ def levelize_meur_to_eur_per_t_methanol(
     return capex_annual_eur / annual_methanol_t_per_yr  # [EUR/t MeOH]
 
 
-def simulate_case(
+def simulate_case_old(
     fuel: FuelAggregate,
     thermo_props: dict[str, Any],
     compression_costs_df: pd.DataFrame,
@@ -335,7 +335,7 @@ def simulate_case(
     Return dict keys use SI tags in names where helpful: *_mj_yr, *_mwth, *_mwel, *_t_yr, *_kmol_s, *_meur, *_lev [EUR/t].
     """
     frac_gasify = GASIFIED_CARBON_FRACTION  # [-]
-    frac_combustor_bio = FRAC_COMBUSTOR_BIO  # [-]
+    frac_combustor_pl = FRAC_COMBUSTOR_PL  # [-]
     frac_energy = FRAC_ENERGY  # [-]
 
     # Characterize fuels that go to combustor vs. gasifier
@@ -349,7 +349,7 @@ def simulate_case(
     o_ratio_bio = fuel.n_o_bio / fuel.n_c_bio  # [kmolO/kmolC]
 
     n_c_combustor = n_c_tot * (1.0 - frac_gasify)  # [kmolC/yr]
-    n_c_combustor_bio = n_c_combustor * frac_combustor_bio  # [kmolC/yr]
+    n_c_combustor_bio = n_c_combustor * (1.0 - frac_combustor_pl)  # [kmolC/yr]
     n_c_combustor_pl = n_c_combustor - n_c_combustor_bio  # [kmolC/yr]
     n_h_combustor = h_ratio_pl * n_c_combustor_pl + h_ratio_bio * n_c_combustor_bio  # [kmolH/yr]
     n_o_combustor = o_ratio_pl * n_c_combustor_pl + o_ratio_bio * n_c_combustor_bio  # [kmolO/yr]
@@ -455,6 +455,9 @@ def simulate_case(
     w_mix_sum = float(sum(wcomp_mix))  # [MWel] syngas compressor shaft
     w_h2_sum = float(sum(wcomp_h2))  # [MWel] electrolyzer H2 compressor shaft
     w_recycle = (w_h2_sum + w_mix_sum) * RECYCLE_RATIO  # [MWel] recycle compression proxy
+    print(n_h2_s)
+    print(w_mix_sum)
+    print(w_h2_sum)
 
     n_ch3oh = n_c_gasifier  # [kmolCH3OH/yr] all gasified C → methanol (model closure)
     m_ch3oh_kg_yr = n_ch3oh * 32.0  # [kg/yr] M_CH3OH = 32 kg/kmol
@@ -532,6 +535,206 @@ def simulate_case(
     )  # [t/a] simple mass closure residual
 
     # Returned scalars: MJ/yr, MWth, MWel, t/a, kmol/s, MEUR, [-], EUR/t MeOH (see keys).
+    return {
+        "e_input_mj_yr": e_input,  # [MJ/yr]
+        "q_steam_demand_mj_yr": q_steam_demand_mj_yr,  # [MJ/yr]
+        "q_steam_available_mj_yr": q_steam_available,  # [MJ/yr]
+        "ratio_steam_demand_available": q_steam_demand_mj_yr / q_steam_available if q_steam_available else float("nan"),  # [-]
+        "c_gasified_t_yr": n_c_gasifier * 12.0 / 1000.0,  # [t/a]
+        "c_combusted_t_yr": n_c_combustor * 12.0 / 1000.0,  # [t/a]
+        "frac_bio_combustor": n_c_combustor_bio / n_c_combustor if n_c_combustor else float("nan"),  # [-]
+        "frac_bio_gasifier": n_c_gasifier_bio / n_c_gasifier if n_c_gasifier else float("nan"),  # [-]
+        "input_fuel_mwth": input_fuel_mwth,  # [MWth]
+        "q_syngas_mwth": q_syngas_mwth,  # [MWth]
+        "hydrogen_produced_mwth": hydrogen_produced_mwth,  # [MWth]
+        "steam_mwth": steam_mwth,  # [MWth]
+        "methanol_out_mwth": q_synthesis_output,  # [MWth]
+        "ph2_mwel": ph2_mwel,  # [MWel]
+        "wcomp_mix_mwel": w_mix_sum,  # [MWel]
+        "wcomp_h2_mwel": w_h2_sum,  # [MWel]
+        "wcomp_recycle_mwel": w_recycle,  # [MWel]
+        "power_input_mwel": power_input_mwel,  # [MWel]
+        "eta_synthesis": ratio_synthesis,  # [-] Q_meoh / Q_in (mixed units in Q_in)
+        "eta_total": eff_total,  # [-] Q_meoh / (fuel_th + power_el)
+        "n_o2_demand_kmol_s": n_o2_demand,  # [kmolO2/s]
+        "n_o2_electrolyzer_kmol_s": n_h2_s / 2.0,  # [kmolO2/s]
+        "n_o2_combustor_kmol_s": n_o2_combustor,  # [kmolO2/s]
+        "waste_t_yr": waste_t_yr,  # [t/a]
+        "methanol_t_yr": methanol_t_yr,  # [t/a]
+        "combusted_t_yr": combusted_t_yr,  # [t/a]
+        "added_h2_t_yr": added_h2_t_yr,  # [t/a]
+        "consumed_o2_t_yr": consumed_o2_t_yr,  # [t/a]
+        "gasif_steam_t_yr": added_steam_t_yr,  # [t/a]
+        "mass_diff_t_yr": mass_diff_t_yr,  # [t/a]
+        "annual_methanol_t_yr": annual_methanol_t_yr,  # [t/a]
+        "capex_sorting_meur": capex_sorting_meur,  # [MEUR] centralized hub
+        "capex_gasif_meur": capex_gasif_meur,  # [MEUR]
+        "capex_h2_meur": capex_h2_meur,  # [MEUR] electrolyzer + H2 compression
+        "capex_h2_electrolyzer_meur": capex_h2_electrolyzer_meur,  # [MEUR]
+        "capex_h2_comp_meur": capex_h2_comp_meur,  # [MEUR]
+        "opex_sorting_meur_a": opex_sorting_meur_a,  # [MEUR/a]
+        "opex_gasif_meur_a": opex_gasif_meur_a,  # [MEUR/a]
+        "opex_h2_meur_a": opex_h2_meur_a,  # [MEUR/a]
+    }
+
+
+def simulate_case_new(
+    fuel: FuelAggregate,
+    thermo_props: dict[str, Any],
+    compression_costs_df: pd.DataFrame,
+    debug: bool = False,
+) -> Dict[str, Any]:
+    """Run gasification → synthesis → costs for one aggregated fuel bundle.
+
+    Return dict keys use SI tags in names where helpful: *_mj_yr, *_mwth, *_mwel, *_t_yr, *_kmol_s, *_meur, *_lev [EUR/t].
+    """
+    frac_gasify = GASIFIED_CARBON_FRACTION  # [-]
+    frac_combustor_pl = FRAC_COMBUSTOR_PL  # [-]
+    frac_energy = FRAC_ENERGY  # [-] refer to Danish technology_data_for_renewable_fuels
+
+    # Characterize fuels that go to combustor vs. gasifier
+    n_c_tot = fuel.n_c_pl + fuel.n_c_bio  # [kmolC/yr] total organic C (fossil+bio)
+    if n_c_tot <= 0:
+        raise ValueError("aggregate carbon moles must be positive")
+
+    h_ratio_pl = fuel.n_h_pl / fuel.n_c_pl  # [kmolH/kmolC]
+    o_ratio_pl = fuel.n_o_pl / fuel.n_c_pl  # [kmolO/kmolC]
+    h_ratio_bio = fuel.n_h_bio / fuel.n_c_bio  # [kmolH/kmolC]
+    o_ratio_bio = fuel.n_o_bio / fuel.n_c_bio  # [kmolO/kmolC]
+
+    n_c_combustor = n_c_tot * (1.0 - frac_gasify)  # [kmolC/yr]
+    n_c_combustor_bio = n_c_combustor * (1.0 - frac_combustor_pl)  # [kmolC/yr]
+    n_c_combustor_pl = n_c_combustor - n_c_combustor_bio  # [kmolC/yr]
+    n_h_combustor = h_ratio_pl * n_c_combustor_pl + h_ratio_bio * n_c_combustor_bio  # [kmolH/yr]
+    n_o_combustor = o_ratio_pl * n_c_combustor_pl + o_ratio_bio * n_c_combustor_bio  # [kmolO/yr]
+
+    n_c_gasifier = n_c_tot - n_c_combustor  # [kmolC/yr]
+    n_c_gasifier_bio = fuel.n_c_bio - n_c_combustor_bio  # [kmolC/yr]
+    n_c_gasifier_pl = fuel.n_c_pl - n_c_combustor_pl  # [kmolC/yr]
+    n_h_gasifier = h_ratio_pl * n_c_gasifier_pl + h_ratio_bio * n_c_gasifier_bio  # [kmolH/yr]
+    n_o_gasifier = o_ratio_pl * n_c_gasifier_pl + o_ratio_bio * n_c_gasifier_bio  # [kmolO/yr]
+
+    q_combustor = (n_c_combustor_pl * 12.0 + h_ratio_pl * n_c_combustor_pl * 1.0 + o_ratio_pl * n_c_combustor_pl * 16.0) * fuel.lhv_pl  # [MJ/yr]
+    q_combustor += (n_c_combustor_bio * 12.0 + h_ratio_bio * n_c_combustor_bio * 1.0 + o_ratio_bio * n_c_combustor_bio * 16.0) * fuel.lhv_bio  # [MJ/yr]
+    q_gasifier = (n_c_gasifier_pl * 12.0 + h_ratio_pl * n_c_gasifier_pl * 1.0 + o_ratio_pl * n_c_gasifier_pl * 16.0) * fuel.lhv_pl  # [MJ/yr]
+    q_gasifier += (n_c_gasifier_bio * 12.0 + h_ratio_bio * n_c_gasifier_bio * 1.0 + o_ratio_bio * n_c_gasifier_bio * 16.0) * fuel.lhv_bio  # [MJ/yr]
+    if debug:
+        print("Input energy:", q_combustor, q_gasifier, q_combustor/(q_combustor+q_gasifier), fuel.e_input_mj_yr/(q_combustor+q_gasifier) )
+
+    # Calculate yields per second
+    molar_ch3oh = 32 # [kg/kmol]
+    lhv_ch3oh = LHV_CH3OH_MJ_PER_KG * molar_ch3oh # [MJ/kmol]
+    q_gasifier = q_gasifier / (FLH_H_PER_YR * 3600) # [MWth]
+    q_methanol = q_gasifier * frac_energy # [MWth]
+
+    n_c_methanol_base = q_methanol / lhv_ch3oh # [kmolC/s] base methanol yield excluding any hydrogenation
+    n_c_gasifier = n_c_gasifier / (FLH_H_PER_YR * 3600) # [kmolC/s]
+    n_co2_syngas = n_c_gasifier - n_c_methanol_base # [kmolCO2/s] we may produce more methanol from this CO2 by adding H2
+    n_co_syngas = n_c_gasifier - n_co2_syngas # [kmolCO/s]
+    n_h2_syngas = 2 * n_co_syngas # [kmolH2/s] before additional hydrogenation, our syngas must have the composition 2H2:1CO to create CH3OH
+
+    # Assume 1 mol H2O steam is added per mol CHyOx (like Beiron's initial guess - this may produce a lot of H2O but we neglect that issue)
+    n_h2o_gasifier = n_c_gasifier # [kmolH2O/s]
+    n_h2o_syngas = (n_h_gasifier / (FLH_H_PER_YR * 3600)) + 2 * n_h2o_gasifier - 2 * n_h2_syngas # [kmolH/s]
+    n_h2o_syngas /= 2 # [kmolH2O/s] adjust units to H2O
+
+    # Calculate (re)compression work of syngas and H2
+    n_syngas = n_h2_syngas + n_co_syngas + n_co2_syngas + n_h2o_syngas # [kmol/s]
+    q_syngas = n_h2_syngas * LHV_H2_MJ_PER_KMOL + n_co_syngas * LHV_CO_MJ_PER_KMOL # [MWth]
+    syngas_mix = {
+        "H2": n_h2_syngas / n_syngas,  # [kmol/kmol]
+        "CO": n_co_syngas / n_syngas,  # [kmol/kmol]
+        "CO2": n_co2_syngas / n_syngas,  # [kmol/kmol]
+        "H2O": n_h2o_syngas / n_syngas,  # [kmol/kmol]
+    }
+
+    wcomp_mix, _, _, _ = compression_energy(
+        n_syngas,
+        T1=40 + 273.15,
+        P1=1.0,
+        thermo_props=thermo_props,
+        gas=syngas_mix,
+        n_stages=3,
+        pr=3.8,
+        Tdiff=30,
+        n_is=0.8,
+        debug=debug,
+    )
+
+    n_h2_electrolyzer = n_co2_syngas * 3.0  # [kmolH2/s] CO2 + 3H2 → CH3OH hydrogenation in addition to n_c_methanol_base
+    wcomp_h2, _, _, _ = compression_energy(
+        n_h2_electrolyzer,
+        T1=75 + 273.15,
+        P1=20,
+        thermo_props=thermo_props,
+        gas="H2",
+        n_stages=2,
+        pr=1.7,
+        Tdiff=60,
+        n_is=0.8,
+        debug=debug,
+    )
+    w_mix_sum = float(sum(wcomp_mix))  # [MWel] syngas compressor shaft
+    w_h2_sum = float(sum(wcomp_h2))  # [MWel] electrolyzer H2 compressor shaft
+    w_recycle = (w_h2_sum + w_mix_sum) * RECYCLE_RATIO  # [MWel] recycle compression proxy
+    print(w_recycle)
+
+    # Calculate new methanol yield after hydrogenation and combustor CO2
+    n_c_methanol_added = n_co2_syngas # [kmol/s]
+    n_c_methanol_total = n_c_methanol_base + n_c_methanol_added # [kmol/s]
+    q_methanol_final = n_c_methanol_total * lhv_ch3oh # [MWth]
+
+    qh2_mwth = n_h2_electrolyzer * LHV_H2_MJ_PER_KMOL  # [MWth]
+    ph2_mwel = qh2_mwth / ETA_ELECTROLYZER  # [MWel] electrolyzer AC power
+    print(q_syngas)
+    print(n_co_syngas, n_co2_syngas, n_co_syngas/(n_co_syngas+n_co2_syngas), n_h2_syngas/n_co_syngas)
+    print(q_methanol_final, q_gasifier, ph2_mwel, ph2_mwel+w_recycle, q_methanol_final/(q_combustor/ (FLH_H_PER_YR * 3600)+q_gasifier+ph2_mwel+w_recycle))
+
+    n_co2_combustor = n_c_combustor # [kmolCO2/yr]
+    m_co2_combustor = n_co2_combustor * 44.0 # [kgCO2/yr]
+    m_co2_combustor_bio = m_co2_combustor * (n_c_combustor_bio/n_c_combustor) # [kgCO2/yr]
+    m_co2_combustor_pl = m_co2_combustor * (n_c_combustor_pl/n_c_combustor) # [kgCO2/yr]
+
+    # Calculate costs
+    m_ch3oh_kg_yr = n_c_methanol_total * 32.0 # [kg/yr] 
+    annual_methanol_t_yr = m_ch3oh_kg_yr / 1000.0  # [t methanol/a]
+    capacity_sorting_t_yr = fuel.m_tot / 1000.0  # [t waste/a] sorted waste nameplate
+
+    capex_sorting_at_ref = CAPEX_SORTING_REF_MEUR * (
+        capacity_sorting_t_yr / CAPACITY_SORTING_REF_T_PER_YR
+    ) ** SCALE_EXPONENT_K  # [MEUR] at CEPCI_SORTING_REF
+    capex_sorting_meur = cepci_escalate(capex_sorting_at_ref, CEPCI_SORTING_REF)  # [MEUR] at CEPCI_2026
+    opex_fix_sorting_meur = capex_sorting_meur * FIXATE_CAPEX  # [MEUR/a]
+    opex_var_sorting_eur_per_t = cepci_escalate(
+        OPEX_VAR_SORTING_EUR_PER_T_WASTE, CEPCI_OPEX_SORTING_REF
+    )  # [EUR/t waste] at CEPCI_2026
+    opex_var_sorting_meur = opex_var_sorting_eur_per_t * capacity_sorting_t_yr * 1e-6  # [MEUR/a]
+    opex_sorting_meur_a = opex_fix_sorting_meur + opex_var_sorting_meur  # [MEUR/a]
+
+    capex_gasif_at_ref = CAPEX_GASIFICATION_REF_MEUR * (
+        annual_methanol_t_yr / CAPACITY_GASIFICATION_REF_T_PER_YR
+    ) ** SCALE_EXPONENT_K  # [MEUR] at CEPCI_GASIFICATION_REF
+    capex_gasif_meur = cepci_escalate(capex_gasif_at_ref, CEPCI_GASIFICATION_REF)  # [MEUR] at CEPCI_2026
+    opex_fix_gasif_meur = capex_gasif_meur * FIXATE_CAPEX  # [MEUR/a]
+    opex_var_gasif_eur_per_mwh = cepci_escalate(
+        OPEX_VAR_GASIFICATION_EUR_PER_MWH_FUEL, CEPCI_OPEX_GASIFICATION_REF
+    )  # [EUR/MWh_fuel] at CEPCI_2026
+    opex_var_gasif_meur = (
+        opex_var_gasif_eur_per_mwh * (fuel.lhv_tot_blend * fuel.m_tot) / 3600.0 * 1e-6
+    )  # [MEUR/a]
+    opex_energy_gasif_meur = (w_mix_sum + w_h2_sum + w_recycle) * FLH_H_PER_YR * CELC_EUR_PER_MWH * 1e-6  # [MEUR/a]
+    opex_gasif_meur_a = opex_fix_gasif_meur + opex_var_gasif_meur + opex_energy_gasif_meur  # [MEUR/a]
+
+    cepci_h2_adjustment = cepci_escalate(1.0, CEPCI_H2_REF)  # [-] align with plan_CCU CEPCI_scenario / CEPCI_reference
+    capex_h2_electrolyzer_meur = CAPEX_H2_REF_KEUR_PER_MWE * ph2_mwel * 1e-3 * cepci_h2_adjustment  # [MEUR]
+    capex_h2_comp_meur = (
+        compression_capex_eur(wcomp_h2, compression_costs_df, debug=debug) * 1e-6 * cepci_h2_adjustment
+    )  # [MEUR]
+    capex_h2_meur = capex_h2_electrolyzer_meur + capex_h2_comp_meur  # [MEUR] electrolyzer + H2 compression
+    opex_fix_h2_meur = capex_h2_meur * FIXATE_CAPEX  # [MEUR/a] fixed OPEX on all H2-block CAPEX
+    opex_var_h2_meur = ph2_mwel * FLH_H_PER_YR * CELC_EUR_PER_MWH * 1e-6  # [MEUR/a] electrolyzer electricity only
+    opex_h2_meur_a = opex_fix_h2_meur + opex_var_h2_meur  # [MEUR/a]
+
     return {
         "e_input_mj_yr": e_input,  # [MJ/yr]
         "q_steam_demand_mj_yr": q_steam_demand_mj_yr,  # [MJ/yr]
@@ -930,7 +1133,7 @@ def main() -> None:
     for n_plants in range(1, N_CASES + 1):
         subset = plants.iloc[:n_plants]
         fuel = aggregate_fuel(subset)
-        out = simulate_case(fuel, thermo_props, compression_costs, debug=False)
+        out = simulate_case_new(fuel, thermo_props, compression_costs, debug=False)
         replacement = sum_replacement_costs(subset, truck_costs, debug=False)
         central_costs = {
             "capex_sorting_meur": out["capex_sorting_meur"],
