@@ -47,7 +47,7 @@ CAPACITY_SORTING_REF_T_PER_YR = 200_000.0  # [t waste/a] Tekniska Verken referen
 OPEX_VAR_SORTING_EUR_PER_T_WASTE = 200.0 * SEK_TO_EUR  # [EUR/t waste] variable sorting OPEX at CEPCI_OPEX_SORTING_REF (Brista)
 CEPCI_OPEX_SORTING_REF = CEPCI_2022  # [-] Brista variable OPEX reference year
 
-CAPEX_GASIFICATION_REF_MEUR = 749_729_639 * 1e-6  # [MEUR] ECOPLANTA gasification+synfuel train at CEPCI_GASIFICATION_REF
+CAPEX_GASIFICATION_REF_MEUR = 749_729_639 * 1e-6  # [MEUR] ECOPLANTA gasif.+synfuel train incl. syngas compression at CEPCI_GASIFICATION_REF
 CEPCI_GASIFICATION_REF = CEPCI_LEGACY  # [-] legacy ref year → escalated to CEPCI_2026
 CAPACITY_GASIFICATION_REF_T_PER_YR = 237_000.0  # [t methanol/a] reference methanol nameplate
 OPEX_VAR_GASIFICATION_EUR_PER_MWH_FUEL = 1.4  # [EUR/MWh_fuel] variable non-energy OPEX at CEPCI_OPEX_GASIFICATION_REF (Beiron)
@@ -295,11 +295,17 @@ def levelize_all_costs(
         "eur_t_gasif_opex": levelize_opex_meur_a_to_eur_per_t_methanol(
             central["opex_gasif_meur_a"], annual_methanol_t_per_yr
         ),
-        "eur_t_h2_capex": levelize_meur_to_eur_per_t_methanol(
-            central["capex_h2_meur"], annual_methanol_t_per_yr, dr, lifetime
+        "eur_t_comp_capex": levelize_meur_to_eur_per_t_methanol(
+            central["capex_compression_meur"], annual_methanol_t_per_yr, dr, lifetime
+        ),  # H2 compressor only; syngas comp. in gasif. CAPEX
+        "eur_t_comp_opex": levelize_opex_meur_a_to_eur_per_t_methanol(
+            central["opex_compression_meur_a"], annual_methanol_t_per_yr
         ),
-        "eur_t_h2_opex": levelize_opex_meur_a_to_eur_per_t_methanol(
-            central["opex_h2_meur_a"], annual_methanol_t_per_yr
+        "eur_t_electrolyzer_capex": levelize_meur_to_eur_per_t_methanol(
+            central["capex_electrolyzer_meur"], annual_methanol_t_per_yr, dr, lifetime
+        ),
+        "eur_t_electrolyzer_opex": levelize_opex_meur_a_to_eur_per_t_methanol(
+            central["opex_electrolyzer_meur_a"], annual_methanol_t_per_yr
         ),
     }
     lev["eur_t_total"] = sum(lev.values())
@@ -492,37 +498,41 @@ def simulate_case_old(
     capex_sorting_at_ref = CAPEX_SORTING_REF_MEUR * (
         capacity_sorting_t_yr / CAPACITY_SORTING_REF_T_PER_YR
     ) ** SCALE_EXPONENT_K  # [MEUR] at CEPCI_SORTING_REF
-    capex_sorting_meur = cepci_escalate(capex_sorting_at_ref, CEPCI_SORTING_REF)  # [MEUR] at CEPCI_2026
+    capex_sorting_meur = cepci_escalate(capex_sorting_at_ref, CEPCI_SORTING_REF)  # [MEUR]
     opex_fix_sorting_meur = capex_sorting_meur * FIXATE_CAPEX  # [MEUR/a]
     opex_var_sorting_eur_per_t = cepci_escalate(
         OPEX_VAR_SORTING_EUR_PER_T_WASTE, CEPCI_OPEX_SORTING_REF
-    )  # [EUR/t waste] at CEPCI_2026
+    )  # [EUR/t waste]
     opex_var_sorting_meur = opex_var_sorting_eur_per_t * capacity_sorting_t_yr * 1e-6  # [MEUR/a]
     opex_sorting_meur_a = opex_fix_sorting_meur + opex_var_sorting_meur  # [MEUR/a]
 
     capex_gasif_at_ref = CAPEX_GASIFICATION_REF_MEUR * (
         annual_methanol_t_yr / CAPACITY_GASIFICATION_REF_T_PER_YR
     ) ** SCALE_EXPONENT_K  # [MEUR] at CEPCI_GASIFICATION_REF
-    capex_gasif_meur = cepci_escalate(capex_gasif_at_ref, CEPCI_GASIFICATION_REF)  # [MEUR] at CEPCI_2026
+    capex_gasif_meur = cepci_escalate(capex_gasif_at_ref, CEPCI_GASIFICATION_REF)  # [MEUR]
     opex_fix_gasif_meur = capex_gasif_meur * FIXATE_CAPEX  # [MEUR/a]
     opex_var_gasif_eur_per_mwh = cepci_escalate(
         OPEX_VAR_GASIFICATION_EUR_PER_MWH_FUEL, CEPCI_OPEX_GASIFICATION_REF
-    )  # [EUR/MWh_fuel] at CEPCI_2026
+    )  # [EUR/MWh_fuel]
     opex_var_gasif_meur = (
         opex_var_gasif_eur_per_mwh * (fuel.lhv_tot_blend * fuel.m_tot) / 3600.0 * 1e-6
     )  # [MEUR/a]
-    opex_energy_gasif_meur = (w_mix_sum + w_h2_sum + w_recycle) * FLH_H_PER_YR * CELC_EUR_PER_MWH * 1e-6  # [MEUR/a]
-    opex_gasif_meur_a = opex_fix_gasif_meur + opex_var_gasif_meur + opex_energy_gasif_meur  # [MEUR/a]
+    opex_gasif_meur_a = opex_fix_gasif_meur + opex_var_gasif_meur  # [MEUR/a]
 
-    cepci_h2_adjustment = cepci_escalate(1.0, CEPCI_H2_REF)  # [-] align with plan_CCU CEPCI_scenario / CEPCI_reference
-    capex_h2_electrolyzer_meur = CAPEX_H2_REF_KEUR_PER_MWE * ph2_mwel * 1e-3 * cepci_h2_adjustment  # [MEUR]
-    capex_h2_comp_meur = (
-        compression_capex_eur(wcomp_h2, compression_costs_df, debug=debug) * 1e-6 * cepci_h2_adjustment
-    )  # [MEUR]
-    capex_h2_meur = capex_h2_electrolyzer_meur + capex_h2_comp_meur  # [MEUR] electrolyzer + H2 compression
-    opex_fix_h2_meur = capex_h2_meur * FIXATE_CAPEX  # [MEUR/a] fixed OPEX on all H2-block CAPEX
-    opex_var_h2_meur = ph2_mwel * FLH_H_PER_YR * CELC_EUR_PER_MWH * 1e-6  # [MEUR/a] electrolyzer electricity only
-    opex_h2_meur_a = opex_fix_h2_meur + opex_var_h2_meur  # [MEUR/a]
+    w_comp_mwel = w_mix_sum + w_h2_sum + w_recycle  # [MWel] syngas + H2 + recycle compressors
+    cepci_h2_adj = cepci_escalate(1.0, CEPCI_H2_REF)  # [-]
+    # Syngas compression CAPEX is in CAPEX_GASIFICATION_REF_MEUR (ECOPLANTA); H2 only via Deng [2019].
+    capex_compression_meur = (
+        compression_capex_eur(wcomp_h2, compression_costs_df, debug=debug) * 1e-6 * cepci_h2_adj
+    )  # [MEUR] electrolyzer H2 compressor train only
+    opex_fix_compression_meur = capex_compression_meur * FIXATE_CAPEX  # [MEUR/a]
+    opex_energy_compression_meur = w_comp_mwel * FLH_H_PER_YR * CELC_EUR_PER_MWH * 1e-6  # [MEUR/a]
+    opex_compression_meur_a = opex_fix_compression_meur + opex_energy_compression_meur  # [MEUR/a]
+
+    capex_electrolyzer_meur = CAPEX_H2_REF_KEUR_PER_MWE * ph2_mwel * 1e-3 * cepci_h2_adj  # [MEUR]
+    opex_fix_electrolyzer_meur = capex_electrolyzer_meur * FIXATE_CAPEX  # [MEUR/a]
+    opex_energy_electrolyzer_meur = ph2_mwel * FLH_H_PER_YR * CELC_EUR_PER_MWH * 1e-6  # [MEUR/a]
+    opex_electrolyzer_meur_a = opex_fix_electrolyzer_meur + opex_energy_electrolyzer_meur  # [MEUR/a]
 
     combusted_t_yr = m_combustor / 1000.0  # [t/a]
     added_h2_t_yr = 2.0 * hydrogen_produced_mwth / (LHV_H2_MJ_PER_KMOL / 3600.0) * FLH_H_PER_YR / 1000.0  # [t/a] electrolytic H2 mass
@@ -567,14 +577,14 @@ def simulate_case_old(
         "gasif_steam_t_yr": added_steam_t_yr,  # [t/a]
         "mass_diff_t_yr": mass_diff_t_yr,  # [t/a]
         "annual_methanol_t_yr": annual_methanol_t_yr,  # [t/a]
-        "capex_sorting_meur": capex_sorting_meur,  # [MEUR] centralized hub
-        "capex_gasif_meur": capex_gasif_meur,  # [MEUR]
-        "capex_h2_meur": capex_h2_meur,  # [MEUR] electrolyzer + H2 compression
-        "capex_h2_electrolyzer_meur": capex_h2_electrolyzer_meur,  # [MEUR]
-        "capex_h2_comp_meur": capex_h2_comp_meur,  # [MEUR]
+        "capex_sorting_meur": capex_sorting_meur,  # [MEUR]
         "opex_sorting_meur_a": opex_sorting_meur_a,  # [MEUR/a]
+        "capex_gasif_meur": capex_gasif_meur,  # [MEUR]
         "opex_gasif_meur_a": opex_gasif_meur_a,  # [MEUR/a]
-        "opex_h2_meur_a": opex_h2_meur_a,  # [MEUR/a]
+        "capex_compression_meur": capex_compression_meur,  # [MEUR] H2 compressor only (syngas in gasif. CAPEX)
+        "opex_compression_meur_a": opex_compression_meur_a,  # [MEUR/a] all compressor electricity
+        "capex_electrolyzer_meur": capex_electrolyzer_meur,  # [MEUR]
+        "opex_electrolyzer_meur_a": opex_electrolyzer_meur_a,  # [MEUR/a]
     }
 
 
@@ -625,6 +635,7 @@ def simulate_case_new(
     molar_ch3oh = 32 # [kg/kmol]
     lhv_ch3oh = LHV_CH3OH_MJ_PER_KG * molar_ch3oh # [MJ/kmol]
     q_gasifier = q_gasifier / (FLH_H_PER_YR * 3600) # [MWth]
+    q_combustor = q_combustor / (FLH_H_PER_YR * 3600) # [MWth]
     q_methanol = q_gasifier * frac_energy # [MWth]
 
     n_c_methanol_base = q_methanol / lhv_ch3oh # [kmolC/s] base methanol yield excluding any hydrogenation
@@ -677,7 +688,6 @@ def simulate_case_new(
     w_mix_sum = float(sum(wcomp_mix))  # [MWel] syngas compressor shaft
     w_h2_sum = float(sum(wcomp_h2))  # [MWel] electrolyzer H2 compressor shaft
     w_recycle = (w_h2_sum + w_mix_sum) * RECYCLE_RATIO  # [MWel] recycle compression proxy
-    print(w_recycle)
 
     # Calculate new methanol yield after hydrogenation and combustor CO2
     n_c_methanol_added = n_co2_syngas # [kmol/s]
@@ -686,95 +696,115 @@ def simulate_case_new(
 
     qh2_mwth = n_h2_electrolyzer * LHV_H2_MJ_PER_KMOL  # [MWth]
     ph2_mwel = qh2_mwth / ETA_ELECTROLYZER  # [MWel] electrolyzer AC power
-    print(q_syngas)
-    print(n_co_syngas, n_co2_syngas, n_co_syngas/(n_co_syngas+n_co2_syngas), n_h2_syngas/n_co_syngas)
-    print(q_methanol_final, q_gasifier, ph2_mwel, ph2_mwel+w_recycle, q_methanol_final/(q_combustor/ (FLH_H_PER_YR * 3600)+q_gasifier+ph2_mwel+w_recycle))
 
     n_co2_combustor = n_c_combustor # [kmolCO2/yr]
     m_co2_combustor = n_co2_combustor * 44.0 # [kgCO2/yr]
     m_co2_combustor_bio = m_co2_combustor * (n_c_combustor_bio/n_c_combustor) # [kgCO2/yr]
     m_co2_combustor_pl = m_co2_combustor * (n_c_combustor_pl/n_c_combustor) # [kgCO2/yr]
 
+    # Estimate total efficiency and heat losses over the GASIFIER, COMBUSTOR, ELECTROLYZER, and SYNTHESIS units
+    w_power_mwel = ph2_mwel + w_recycle  # [MWel]
+    eta_total = q_methanol_final / (q_combustor + q_gasifier + w_power_mwel)  # [-]
+
+    q_loss_gasifier = q_gasifier - q_syngas # [MWth]
+    q_loss_combustor = q_combustor # [MWth]
+    q_loss_electrolyzer = ph2_mwel - qh2_mwth # [MWth]
+    q_loss_synthesis = q_syngas + qh2_mwth + w_recycle - q_methanol_final # [MWth]
+    q_loss_total = q_loss_gasifier + q_loss_combustor + q_loss_electrolyzer + q_loss_synthesis # [MWth]
+    if debug:
+        print(q_loss_total, (q_combustor + q_gasifier + w_power_mwel)-q_methanol_final, q_loss_total/((q_combustor + q_gasifier + w_power_mwel)-q_methanol_final))
+
     # Calculate costs
-    m_ch3oh_kg_yr = n_c_methanol_total * 32.0 # [kg/yr] 
+    m_ch3oh_kg_yr = n_c_methanol_total * 32.0 * FLH_H_PER_YR * 3600.0  # [kg/yr] from [kmol/s]
     annual_methanol_t_yr = m_ch3oh_kg_yr / 1000.0  # [t methanol/a]
     capacity_sorting_t_yr = fuel.m_tot / 1000.0  # [t waste/a] sorted waste nameplate
 
     capex_sorting_at_ref = CAPEX_SORTING_REF_MEUR * (
         capacity_sorting_t_yr / CAPACITY_SORTING_REF_T_PER_YR
     ) ** SCALE_EXPONENT_K  # [MEUR] at CEPCI_SORTING_REF
-    capex_sorting_meur = cepci_escalate(capex_sorting_at_ref, CEPCI_SORTING_REF)  # [MEUR] at CEPCI_2026
+    capex_sorting_meur = cepci_escalate(capex_sorting_at_ref, CEPCI_SORTING_REF)  # [MEUR]
     opex_fix_sorting_meur = capex_sorting_meur * FIXATE_CAPEX  # [MEUR/a]
     opex_var_sorting_eur_per_t = cepci_escalate(
         OPEX_VAR_SORTING_EUR_PER_T_WASTE, CEPCI_OPEX_SORTING_REF
-    )  # [EUR/t waste] at CEPCI_2026
+    )  # [EUR/t waste]
     opex_var_sorting_meur = opex_var_sorting_eur_per_t * capacity_sorting_t_yr * 1e-6  # [MEUR/a]
     opex_sorting_meur_a = opex_fix_sorting_meur + opex_var_sorting_meur  # [MEUR/a]
 
     capex_gasif_at_ref = CAPEX_GASIFICATION_REF_MEUR * (
         annual_methanol_t_yr / CAPACITY_GASIFICATION_REF_T_PER_YR
     ) ** SCALE_EXPONENT_K  # [MEUR] at CEPCI_GASIFICATION_REF
-    capex_gasif_meur = cepci_escalate(capex_gasif_at_ref, CEPCI_GASIFICATION_REF)  # [MEUR] at CEPCI_2026
+    capex_gasif_meur = cepci_escalate(capex_gasif_at_ref, CEPCI_GASIFICATION_REF)  # [MEUR]
     opex_fix_gasif_meur = capex_gasif_meur * FIXATE_CAPEX  # [MEUR/a]
     opex_var_gasif_eur_per_mwh = cepci_escalate(
         OPEX_VAR_GASIFICATION_EUR_PER_MWH_FUEL, CEPCI_OPEX_GASIFICATION_REF
-    )  # [EUR/MWh_fuel] at CEPCI_2026
+    )  # [EUR/MWh_fuel]
     opex_var_gasif_meur = (
         opex_var_gasif_eur_per_mwh * (fuel.lhv_tot_blend * fuel.m_tot) / 3600.0 * 1e-6
     )  # [MEUR/a]
-    opex_energy_gasif_meur = (w_mix_sum + w_h2_sum + w_recycle) * FLH_H_PER_YR * CELC_EUR_PER_MWH * 1e-6  # [MEUR/a]
-    opex_gasif_meur_a = opex_fix_gasif_meur + opex_var_gasif_meur + opex_energy_gasif_meur  # [MEUR/a]
+    opex_gasif_meur_a = opex_fix_gasif_meur + opex_var_gasif_meur  # [MEUR/a]
 
-    cepci_h2_adjustment = cepci_escalate(1.0, CEPCI_H2_REF)  # [-] align with plan_CCU CEPCI_scenario / CEPCI_reference
-    capex_h2_electrolyzer_meur = CAPEX_H2_REF_KEUR_PER_MWE * ph2_mwel * 1e-3 * cepci_h2_adjustment  # [MEUR]
-    capex_h2_comp_meur = (
-        compression_capex_eur(wcomp_h2, compression_costs_df, debug=debug) * 1e-6 * cepci_h2_adjustment
-    )  # [MEUR]
-    capex_h2_meur = capex_h2_electrolyzer_meur + capex_h2_comp_meur  # [MEUR] electrolyzer + H2 compression
-    opex_fix_h2_meur = capex_h2_meur * FIXATE_CAPEX  # [MEUR/a] fixed OPEX on all H2-block CAPEX
-    opex_var_h2_meur = ph2_mwel * FLH_H_PER_YR * CELC_EUR_PER_MWH * 1e-6  # [MEUR/a] electrolyzer electricity only
-    opex_h2_meur_a = opex_fix_h2_meur + opex_var_h2_meur  # [MEUR/a]
+    w_comp_mwel = w_mix_sum + w_h2_sum + w_recycle  # [MWel] syngas + H2 + recycle compressors
+    cepci_h2_adj = cepci_escalate(1.0, CEPCI_H2_REF)  # [-]
+    # Syngas compression CAPEX is in CAPEX_GASIFICATION_REF_MEUR (ECOPLANTA); H2 only via Deng [2019].
+    capex_compression_meur = (
+        compression_capex_eur(wcomp_h2, compression_costs_df, debug=debug) * 1e-6 * cepci_h2_adj
+    )  # [MEUR] electrolyzer H2 compressor train only
+    opex_fix_compression_meur = capex_compression_meur * FIXATE_CAPEX  # [MEUR/a]
+    opex_energy_compression_meur = w_comp_mwel * FLH_H_PER_YR * CELC_EUR_PER_MWH * 1e-6  # [MEUR/a]
+    opex_compression_meur_a = opex_fix_compression_meur + opex_energy_compression_meur  # [MEUR/a]
+
+    capex_electrolyzer_meur = CAPEX_H2_REF_KEUR_PER_MWE * ph2_mwel * 1e-3 * cepci_h2_adj  # [MEUR]
+    opex_fix_electrolyzer_meur = capex_electrolyzer_meur * FIXATE_CAPEX  # [MEUR/a]
+    opex_energy_electrolyzer_meur = ph2_mwel * FLH_H_PER_YR * CELC_EUR_PER_MWH * 1e-6  # [MEUR/a]
+    opex_electrolyzer_meur_a = opex_fix_electrolyzer_meur + opex_energy_electrolyzer_meur  # [MEUR/a]
+
+    if debug:
+        print(
+            "simulate_case_new costs",
+            capex_sorting_meur,
+            capex_gasif_meur,
+            capex_compression_meur,
+            capex_electrolyzer_meur,
+            opex_sorting_meur_a,
+            opex_gasif_meur_a,
+            opex_compression_meur_a,
+            opex_electrolyzer_meur_a,
+        )
 
     return {
-        "e_input_mj_yr": e_input,  # [MJ/yr]
-        "q_steam_demand_mj_yr": q_steam_demand_mj_yr,  # [MJ/yr]
-        "q_steam_available_mj_yr": q_steam_available,  # [MJ/yr]
-        "ratio_steam_demand_available": q_steam_demand_mj_yr / q_steam_available if q_steam_available else float("nan"),  # [-]
-        "c_gasified_t_yr": n_c_gasifier * 12.0 / 1000.0,  # [t/a]
-        "c_combusted_t_yr": n_c_combustor * 12.0 / 1000.0,  # [t/a]
-        "frac_bio_combustor": n_c_combustor_bio / n_c_combustor if n_c_combustor else float("nan"),  # [-]
-        "frac_bio_gasifier": n_c_gasifier_bio / n_c_gasifier if n_c_gasifier else float("nan"),  # [-]
-        "input_fuel_mwth": input_fuel_mwth,  # [MWth]
-        "q_syngas_mwth": q_syngas_mwth,  # [MWth]
-        "hydrogen_produced_mwth": hydrogen_produced_mwth,  # [MWth]
-        "steam_mwth": steam_mwth,  # [MWth]
-        "methanol_out_mwth": q_synthesis_output,  # [MWth]
-        "ph2_mwel": ph2_mwel,  # [MWel]
-        "wcomp_mix_mwel": w_mix_sum,  # [MWel]
-        "wcomp_h2_mwel": w_h2_sum,  # [MWel]
-        "wcomp_recycle_mwel": w_recycle,  # [MWel]
-        "power_input_mwel": power_input_mwel,  # [MWel]
-        "eta_synthesis": ratio_synthesis,  # [-] Q_meoh / Q_in (mixed units in Q_in)
-        "eta_total": eff_total,  # [-] Q_meoh / (fuel_th + power_el)
-        "n_o2_demand_kmol_s": n_o2_demand,  # [kmolO2/s]
-        "n_o2_electrolyzer_kmol_s": n_h2_s / 2.0,  # [kmolO2/s]
-        "n_o2_combustor_kmol_s": n_o2_combustor,  # [kmolO2/s]
-        "waste_t_yr": waste_t_yr,  # [t/a]
-        "methanol_t_yr": methanol_t_yr,  # [t/a]
-        "combusted_t_yr": combusted_t_yr,  # [t/a]
-        "added_h2_t_yr": added_h2_t_yr,  # [t/a]
-        "consumed_o2_t_yr": consumed_o2_t_yr,  # [t/a]
-        "gasif_steam_t_yr": added_steam_t_yr,  # [t/a]
-        "mass_diff_t_yr": mass_diff_t_yr,  # [t/a]
+        "e_input_mj_yr": fuel.e_input_mj_yr,  # [MJ/yr]
+        "c_gasified_t_yr": n_c_gasifier * 12.0 * (FLH_H_PER_YR * 3600)  / 1000.0,  # [t/a] 
+        "c_combusted_t_yr": n_c_combustor * 12.0 / 1000.0,  # [t/a] note customized unit conversion
+        "frac_bio_combustor": n_c_combustor_bio / n_c_combustor,  # [-]
+        "frac_bio_gasifier": n_c_gasifier_bio / n_c_gasifier, # [-]
+
+        "q_combustor_mwth": q_combustor,  # [MWth]
+        "q_gasifier_mwth": q_gasifier,  # [MWth]
+        "q_fuel_mwth": q_combustor + q_gasifier,  # [MWth]
+        "q_syngas_mwth": q_syngas,  # [MWth]
+        "q_hydrogen_mwth": qh2_mwth,  # [MWth]
+        "w_hydrogen_mwel": ph2_mwel,  # [MWel] electrolyzer AC
+        "q_methanol_mwth": q_methanol_final,  # [MWth]
+        "w_comp_syngas_mwel": w_mix_sum,  # [MWel]
+        "w_comp_h2_mwel": w_h2_sum,  # [MWel]
+        "w_recycle_mwel": w_recycle,  # [MWel]
+        "w_power_mwel": w_power_mwel,  # [MWel]
+        "eta_total": eta_total,  # [-]
+        "q_loss_combustor_mwth": q_loss_combustor,  # [MWth]
+        "q_loss_gasifier_mwth": q_loss_gasifier,  # [MWth]
+        "q_loss_electrolyzer_mwth": q_loss_electrolyzer,  # [MWth]
+        "q_loss_synthesis_mwth": q_loss_synthesis,  # [MWth]
+        "q_loss_total_mwth": q_loss_total,  # [MWth]
+
         "annual_methanol_t_yr": annual_methanol_t_yr,  # [t/a]
-        "capex_sorting_meur": capex_sorting_meur,  # [MEUR] centralized hub
-        "capex_gasif_meur": capex_gasif_meur,  # [MEUR]
-        "capex_h2_meur": capex_h2_meur,  # [MEUR] electrolyzer + H2 compression
-        "capex_h2_electrolyzer_meur": capex_h2_electrolyzer_meur,  # [MEUR]
-        "capex_h2_comp_meur": capex_h2_comp_meur,  # [MEUR]
+        "capex_sorting_meur": capex_sorting_meur,  # [MEUR]
         "opex_sorting_meur_a": opex_sorting_meur_a,  # [MEUR/a]
+        "capex_gasif_meur": capex_gasif_meur,  # [MEUR]
         "opex_gasif_meur_a": opex_gasif_meur_a,  # [MEUR/a]
-        "opex_h2_meur_a": opex_h2_meur_a,  # [MEUR/a]
+        "capex_compression_meur": capex_compression_meur,  # [MEUR] H2 compressor only (syngas in gasif. CAPEX)
+        "opex_compression_meur_a": opex_compression_meur_a,  # [MEUR/a] all compressor electricity
+        "capex_electrolyzer_meur": capex_electrolyzer_meur,  # [MEUR]
+        "opex_electrolyzer_meur_a": opex_electrolyzer_meur_a,  # [MEUR/a]
     }
 
 
@@ -792,15 +822,17 @@ def plot_final_case_cost_breakdown(
     central_costs: Dict[str, float],
     lev: Dict[str, float],
     annual_methanol_t_per_yr: float,
+    n_plants: int | None = None,
     dr: float = DISCOUNT_RATE,
     lifetime: int = LIFETIME_YR,
     out_path: str = "results/gasify_all_final_cost_breakdown.png",
     debug: bool = False,
 ):
-    """Three-panel figure: per-plant replacement, centralized hub, levelized EUR/t MeOH (10-plant case)."""
+    """Three-panel figure: per-plant replacement, centralized hub, levelized EUR/t MeOH."""
     per_plant = replacement["per_plant"]
     plant_names = [p["plant_name"] for p in per_plant]
     n = len(plant_names)
+    n_sites = n_plants if n_plants is not None else n
     x = np.arange(n)
     width = 0.26
 
@@ -848,23 +880,28 @@ def plot_final_case_cost_breakdown(
             )
 
     # Panel B — centralized gasifier (single train)
-    cen_labels = ["Sorting", "Gasification", "H2 (el.+comp.)"]
-    cen_x = np.arange(3)
+    cen_labels = ["Sorting", "Gasification", "H₂ compression", "Electrolyzer"]
+    cen_x = np.arange(4)
     cen_w = 0.35
     capex_cen = [
         central_costs["capex_sorting_meur"],
         central_costs["capex_gasif_meur"],
-        central_costs["capex_h2_meur"],
+        central_costs["capex_compression_meur"],
+        central_costs["capex_electrolyzer_meur"],
     ]
     opex_cen = [
         central_costs["opex_sorting_meur_a"],
         central_costs["opex_gasif_meur_a"],
-        central_costs["opex_h2_meur_a"],
+        central_costs["opex_compression_meur_a"],
+        central_costs["opex_electrolyzer_meur_a"],
     ]
     bc1 = ax_cen.bar(cen_x - cen_w / 2, capex_cen, cen_w, label="CAPEX (overnight MEUR)", color="#4477AA", edgecolor="black", linewidth=0.5)
     bc2 = ax_cen.bar(cen_x + cen_w / 2, opex_cen, cen_w, label="OPEX (MEUR/a)", color="#228833", edgecolor="black", linewidth=0.5)
     ax_cen.set_ylabel("Cost (MEUR or MEUR/a)", fontsize=13)
-    ax_cen.set_title("Centralized gasifier hub (aggregated waste from all 10 plants)", fontsize=14)
+    ax_cen.set_title(
+        f"Centralized gasifier hub (aggregated waste from {n_sites} plant(s))",
+        fontsize=14,
+    )
     ax_cen.set_xticks(cen_x)
     ax_cen.set_xticklabels(cen_labels, fontsize=12)
     ax_cen.legend(loc="upper right", fontsize=11)
@@ -892,8 +929,10 @@ def plot_final_case_cost_breakdown(
         "Sort\nOPEX",
         "Gasif.\nCAPEX",
         "Gasif.\nOPEX",
-        "H2\nCAPEX",
-        "H2\nOPEX",
+        "H₂ comp.\nCAPEX",
+        "H₂ comp.\nOPEX",
+        "El.\nCAPEX",
+        "El.\nOPEX",
     ]
     lev_vals = [
         lev["eur_t_truck_opex"],
@@ -903,10 +942,16 @@ def plot_final_case_cost_breakdown(
         lev["eur_t_sort_opex"],
         lev["eur_t_gasif_capex"],
         lev["eur_t_gasif_opex"],
-        lev["eur_t_h2_capex"],
-        lev["eur_t_h2_opex"],
+        lev["eur_t_comp_capex"],
+        lev["eur_t_comp_opex"],
+        lev["eur_t_electrolyzer_capex"],
+        lev["eur_t_electrolyzer_opex"],
     ]
-    lev_colors = ["#66CCEE", "#EE6677", "#EE6677", "#4477AA", "#4477AA", "#228833", "#228833", "#CCBB44", "#CCBB44"]
+    lev_colors = [
+        "#66CCEE", "#EE6677", "#EE6677",
+        "#4477AA", "#4477AA", "#228833", "#228833",
+        "#CCBB44", "#CCBB44", "#AA3377", "#AA3377",
+    ]
     bl_x = range(len(lev_vals))
     bl = ax_lev.bar(bl_x, lev_vals, color=lev_colors, edgecolor="black", linewidth=0.6)
     ax_lev.axhline(lev["eur_t_total"], color="gray", linestyle="--", linewidth=1.2, label=f"Total = {lev['eur_t_total']:.0f} EUR/t")
@@ -932,7 +977,11 @@ def plot_final_case_cost_breakdown(
             fontsize=9,
         )
 
-    fig.suptitle("Cost breakdown — 10 plants replaced by centralized gasifier", fontsize=15, y=1.01)
+    fig.suptitle(
+        f"Cost breakdown — {n_sites} plant(s) replaced by centralized gasifier",
+        fontsize=15,
+        y=1.01,
+    )
     fig.tight_layout()
     d = os.path.dirname(out_path)
     if d:
@@ -962,6 +1011,7 @@ def plot_final_case_energy_breakdown(
     hub_out: Dict[str, float],
     replacement: Dict[str, Any],
     plants_slice: pd.DataFrame | None = None,
+    n_plants: int | None = None,
     out_path: str = "results/gasify_all_final_energy_breakdown.png",
     debug: bool = False,
 ):
@@ -974,6 +1024,10 @@ def plot_final_case_energy_breakdown(
     c_pwr_1 = "#1A5276"
     c_pwr_2 = "#2E86C1"
     c_pwr_3 = "#85C1E9"
+    c_loss_combustor = "#922B21"
+    c_loss_gasifier = "#D35400"
+    c_loss_electrolyzer = "#7D6608"
+    c_loss_synthesis = "#566573"
 
     per_plant = replacement["per_plant"]
     names = [p["plant_name"] for p in per_plant]
@@ -1052,17 +1106,30 @@ def plot_final_case_energy_breakdown(
 
     # Panel B — two groups: (1) Σ HP replacement  (2) centralized gasifier hub
     eta_tot = hub_out["eta_total"]
+    n_sites = n_plants if n_plants is not None else len(names)
     hp_labels = ["Σ heat out\n(HP)", "Σ power deficit\n(HP)", "Σ power deficit\n(site)"]
     hp_vals = [sum_hp_heat, sum_hp_elec, sum_site_pwr]
     hp_colors = [c_heat_2, c_pwr_2, c_pwr_3]
     hp_hatch = "///"  # after HP replacement only
 
-    hub_labels = ["Waste fuel input", "Methanol output", "Hub power input"]
-    hub_vals = [hub_out["input_fuel_mwth"], hub_out["methanol_out_mwth"], hub_out["power_input_mwel"]]
-    hub_colors = [c_fuel, c_heat_1, c_pwr_1]
+    hub_labels = ["Hub fuel\ninput", "Hub power\ninput", "Methanol\noutput", "Heat losses\n(total)"]
+    hub_vals = [
+        hub_out["q_gasifier_mwth"] + hub_out["q_combustor_mwth"],
+        hub_out["w_power_mwel"],
+        hub_out["q_methanol_mwth"],
+    ]
+    hub_colors = [c_fuel, c_pwr_1, c_heat_1]
+    loss_parts = [
+        ("Combustor", hub_out.get("q_loss_combustor_mwth", 0.0)),
+        ("Gasifier", hub_out.get("q_loss_gasifier_mwth", 0.0)),
+        ("Electrolyzer", hub_out.get("q_loss_electrolyzer_mwth", 0.0)),
+        ("Synthesis", hub_out.get("q_loss_synthesis_mwth", 0.0)),
+    ]
+    loss_colors = [c_loss_combustor, c_loss_gasifier, c_loss_electrolyzer, c_loss_synthesis]
 
     x_hp = np.array([0.0, 1.0, 2.0])
     x_hub = np.array([4.5, 5.5, 6.5])
+    x_loss = 7.5
     bar_w = 0.75
 
     bars_hp = ax_sum.bar(
@@ -1082,25 +1149,60 @@ def plot_final_case_energy_breakdown(
         edgecolor="black",
         linewidth=0.5,
     )
+    loss_bottom = 0.0
+    for (loss_label, loss_val), loss_color in zip(loss_parts, loss_colors):
+        loss_val = max(0.0, float(loss_val))
+        if loss_val <= 0:
+            continue
+        ax_sum.bar(
+            x_loss,
+            loss_val,
+            bar_w,
+            bottom=loss_bottom,
+            color=loss_color,
+            edgecolor="black",
+            linewidth=0.4,
+            label=loss_label,
+        )
+        loss_bottom += loss_val
 
     ax_sum.axvline(3.25, color="gray", linestyle=":", linewidth=1.0)
-    ax_sum.set_xticks(list(x_hp) + list(x_hub))
+    ax_sum.set_xticks(list(x_hp) + list(x_hub) + [x_loss])
     ax_sum.set_xticklabels(hp_labels + hub_labels, fontsize=11)
     ax_sum.set_ylabel("Capacity [MW]", fontsize=13)
     ax_sum.set_title(
         f"Aggregated balances — η_total (hub) = {eta_tot:.3f}  |  "
-        "left: HP replacement (10 sites)  |  right: centralized gasifier",
+        f"{n_sites} plant(s) replaced",
         fontsize=13,
     )
     ax_sum.grid(axis="y", alpha=0.35)
     ax_sum.tick_params(axis="y", labelsize=11)
-    ax_sum.text(0.22, -0.11, "HP replacement (Σ, 10 sites)", transform=ax_sum.transAxes, ha="center", fontsize=11)
+    ax_sum.text(0.22, -0.11, f"HP replacement (Σ, {n_sites} sites)", transform=ax_sum.transAxes, ha="center", fontsize=11)
     ax_sum.text(0.78, -0.11, "Centralized gasifier hub", transform=ax_sum.transAxes, ha="center", fontsize=11)
     _annotate_bars(ax_sum, bars_hp)
     _annotate_bars(ax_sum, bars_hub)
+    if loss_bottom > 0:
+        ax_sum.annotate(
+            f"{loss_bottom:.0f}",
+            xy=(x_loss, loss_bottom),
+            xytext=(0, 3),
+            textcoords="offset points",
+            ha="center",
+            va="bottom",
+            fontsize=9,
+        )
+    ax_sum.legend(loc="upper right", fontsize=9, title="Hub heat losses", title_fontsize=9)
+
+    if debug:
+        print(
+            "plot_final_case_energy_breakdown hub losses [MWth]:",
+            {label: val for label, val in loss_parts},
+            "total",
+            hub_out.get("q_loss_total_mwth", loss_bottom),
+        )
 
     fig.suptitle(
-        "Energy balance — 10 plants replaced (MW; thermal MWth and electrical MWel on one axis)",
+        f"Energy balance — {n_sites} plant(s) replaced (MW; MWth and MWel on one axis)",
         fontsize=14,
         y=1.01,
     )
@@ -1126,7 +1228,6 @@ def main() -> None:
     compression_costs = pd.read_csv("data/compression_costs.csv")
 
     energy_rows: List[Dict[str, Any]] = []
-    mass_rows: List[Dict[str, Any]] = []
     cost_rows: List[Dict[str, Any]] = []
     final_case: Dict[str, Any] | None = None
 
@@ -1138,10 +1239,12 @@ def main() -> None:
         central_costs = {
             "capex_sorting_meur": out["capex_sorting_meur"],
             "capex_gasif_meur": out["capex_gasif_meur"],
-            "capex_h2_meur": out["capex_h2_meur"],
+            "capex_compression_meur": out["capex_compression_meur"],
+            "capex_electrolyzer_meur": out["capex_electrolyzer_meur"],
             "opex_sorting_meur_a": out["opex_sorting_meur_a"],
             "opex_gasif_meur_a": out["opex_gasif_meur_a"],
-            "opex_h2_meur_a": out["opex_h2_meur_a"],
+            "opex_compression_meur_a": out["opex_compression_meur_a"],
+            "opex_electrolyzer_meur_a": out["opex_electrolyzer_meur_a"],
         }
         lev = levelize_all_costs(out["annual_methanol_t_yr"], central_costs, replacement, debug=False)
         if n_plants == N_CASES:
@@ -1155,29 +1258,20 @@ def main() -> None:
 
         energy_rows.append(
             {
-                "plants": n_plants,  # [-] count of largest sites cumulated
-                "fuel_mwth": out["input_fuel_mwth"],  # [MWth]
-                "syngas_mwth": out["q_syngas_mwth"],  # [MWth]
-                "h2_lhv_mwth": out["hydrogen_produced_mwth"],  # [MWth]
-                "steam_mwth": out["steam_mwth"],  # [MWth]
-                "meoh_mwth": out["methanol_out_mwth"],  # [MWth]
-                "power_mwel": out["power_input_mwel"],  # [MWel]
-                "pel_mwel": out["ph2_mwel"],  # [MWel]
-                "eta_synth": out["eta_synthesis"],  # [-]
-                "eta_tot": out["eta_total"],  # [-]
-                "Qsd_Qsa": out["ratio_steam_demand_available"],  # [-] steam demand / available (thermal MJ ratio)
-            }
-        )
-        mass_rows.append(
-            {
                 "plants": n_plants,  # [-]
-                "waste_kt_a": out["waste_t_yr"] / 1000.0,  # [kt/a]
-                "meoh_kt_a": out["methanol_t_yr"] / 1000.0,  # [kt/a]
-                "combusted_kt_a": out["combusted_t_yr"] / 1000.0,  # [kt/a]
-                "h2_kt_a": out["added_h2_t_yr"] / 1000.0,  # [kt/a]
-                "o2_kt_a": out["consumed_o2_t_yr"] / 1000.0,  # [kt/a]
-                "steam_kt_a": out["gasif_steam_t_yr"] / 1000.0,  # [kt/a]
-                "mass_diff_kt_a": out["mass_diff_t_yr"] / 1000.0,  # [kt/a]
+                "combustor_mwth": out["q_combustor_mwth"],  # [MWth]
+                "gasifier_mwth": out["q_gasifier_mwth"],  # [MWth]
+                "fuel_mwth": out["q_fuel_mwth"],  # [MWth]
+                "syngas_mwth": out["q_syngas_mwth"],  # [MWth]
+                "h2_lhv_mwth": out["q_hydrogen_mwth"],  # [MWth]
+                "meoh_mwth": out["q_methanol_mwth"],  # [MWth]
+                "pel_mwel": out["w_hydrogen_mwel"],  # [MWel]
+                "wcomp_syngas_mwel": out["w_comp_syngas_mwel"],  # [MWel]
+                "wcomp_h2_mwel": out["w_comp_h2_mwel"],  # [MWel]
+                "wcomp_recycle_mwel": out["w_recycle_mwel"],  # [MWel]
+                "power_mwel": out["w_power_mwel"],  # [MWel]
+                "eta_tot": out["eta_total"],  # [-]
+                "meoh_kt_a": out["annual_methanol_t_yr"] / 1000.0,  # [kt/a]
             }
         )
         cost_rows.append(
@@ -1190,24 +1284,27 @@ def main() -> None:
                 "eur_t_sort_opex": lev["eur_t_sort_opex"],  # [EUR/t MeOH]
                 "eur_t_gasif_capex": lev["eur_t_gasif_capex"],  # [EUR/t MeOH]
                 "eur_t_gasif_opex": lev["eur_t_gasif_opex"],  # [EUR/t MeOH]
-                "eur_t_h2_capex": lev["eur_t_h2_capex"],  # [EUR/t MeOH]
-                "eur_t_h2_opex": lev["eur_t_h2_opex"],  # [EUR/t MeOH]
+                "eur_t_comp_capex": lev["eur_t_comp_capex"],  # [EUR/t MeOH]
+                "eur_t_comp_opex": lev["eur_t_comp_opex"],  # [EUR/t MeOH]
+                "eur_t_electrolyzer_capex": lev["eur_t_electrolyzer_capex"],  # [EUR/t MeOH]
+                "eur_t_electrolyzer_opex": lev["eur_t_electrolyzer_opex"],  # [EUR/t MeOH]
                 "eur_t_total": lev["eur_t_total"],  # [EUR/t MeOH]
                 "meur_truck_capex": 0.0,  # [MEUR] no truck CAPEX
                 "meur_hp": replacement["capex_hp_meur"],  # [MEUR] Σ replaced plants
                 "meur_sort": out["capex_sorting_meur"],  # [MEUR] centralized
                 "meur_gasif": out["capex_gasif_meur"],  # [MEUR]
-                "meur_h2": out["capex_h2_meur"],  # [MEUR]
+                "meur_comp": out["capex_compression_meur"],  # [MEUR]
+                "meur_electrolyzer": out["capex_electrolyzer_meur"],  # [MEUR]
                 "meur_a_truck_opex": replacement["opex_truck_eur_yr"] * 1e-6,  # [MEUR/a]
                 "meur_a_hp_opex": replacement["opex_hp_meur"],  # [MEUR/a]
                 "meur_a_sort_opex": out["opex_sorting_meur_a"],  # [MEUR/a]
                 "meur_a_gasif_opex": out["opex_gasif_meur_a"],  # [MEUR/a]
-                "meur_a_h2_opex": out["opex_h2_meur_a"],  # [MEUR/a]
+                "meur_a_comp_opex": out["opex_compression_meur_a"],  # [MEUR/a]
+                "meur_a_electrolyzer_opex": out["opex_electrolyzer_meur_a"],  # [MEUR/a]
             }
         )
 
     df_e = pd.DataFrame(energy_rows)
-    df_m = pd.DataFrame(mass_rows)
     df_c = pd.DataFrame(cost_rows)
 
     print()
@@ -1215,22 +1312,16 @@ def main() -> None:
     print("TABLE 1 — Energy balance (rates averaged over FLH_gasifier = {} h/yr)".format(int(FLH_H_PER_YR)))
     print("=" * 100)
     print(_fmt(df_e))
-    print("  Units: *_mwth [MWth], *_mwel [MWel], eta_* and Qsd_Qsa [-].")
+    print("  Units: *_mwth [MWth], *_mwel [MWel], eta_tot [-], meoh_kt_a [kt/a].")
     print()
 
     print("=" * 100)
-    print("TABLE 2 — Material balance")
-    print("=" * 100)
-    print(_fmt(df_m))
-    print("  Units: all mass columns [kt/a] (1000 t/a); plants [-] = number of sites cumulated.")
-    print()
-
-    print("=" * 100)
-    print("TABLE 3 — Levelized costs + overnight CAPEX")
+    print("TABLE 2 — Levelized costs + overnight CAPEX")
     print("=" * 100)
     print(_fmt(df_c))
     print("  Units: eur_t_* [EUR/t methanol] levelized on hub methanol; truck/HP summed over replaced sites;")
-    print("  sort/gasif/H2 = single centralized train; meur_* overnight CAPEX, meur_a_* annual OPEX [MEUR/a].")
+    print("  sort/gasif/electrolyzer = centralized hub; comp = H2 compressor only (syngas comp. in gasif. CAPEX);")
+    print("  meur_* overnight CAPEX, meur_a_* annual OPEX [MEUR/a].")
     print()
 
     # PRINT THE eur_t_total FOR EACH CASE
@@ -1243,6 +1334,7 @@ def main() -> None:
             central_costs=final_case["central_costs"],
             lev=final_case["lev"],
             annual_methanol_t_per_yr=final_case["annual_methanol_t_per_yr"],
+            n_plants=N_CASES,
             debug=False,
         )
         print("Saved final-case cost breakdown figure to results/gasify_all_final_cost_breakdown.png")
@@ -1250,6 +1342,7 @@ def main() -> None:
             hub_out=final_case["hub_out"],
             replacement=final_case["replacement"],
             plants_slice=plants.iloc[:N_CASES],
+            n_plants=N_CASES,
             debug=False,
         )
         print("Saved final-case energy breakdown figure to results/gasify_all_final_energy_breakdown.png")
