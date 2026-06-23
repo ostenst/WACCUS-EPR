@@ -5,6 +5,9 @@ plants_df = pd.read_csv("data/plants.csv")
 plant_distances = pd.read_csv('data/plant_distances.csv') # NOTE: Should add inland distances to SiteZero
 plants_df = plants_df.merge(plant_distances, on='Name', how='left')
 
+WASTE_SUM = 0
+PLASTIC_SUM = 0
+BIOMASS_SUM = 0
 rows = []
 for _, plant in plants_df.iterrows():
     
@@ -70,6 +73,9 @@ for _, plant in plants_df.iterrows():
         "LHV_biowet": LHV_biowet, "LHV_tot": LHV_tot,
         "Qlhv": Qlhv,
     })
+    WASTE_SUM += m_tot
+    PLASTIC_SUM += m_pl
+    BIOMASS_SUM += m_bio
 
 # Merge computed columns into the plants dataframe
 plants_clean = plants_df.merge(pd.DataFrame(rows), on="Name", how="left")
@@ -129,5 +135,9 @@ print("\n")
 
 for _, plant in plants_clean.iterrows():
     print(f"{plant['Name']}: {round(plant['FLH'], 0)} h/yr")
+
+print(f"\nTotal waste (incl. moisture and ash): {WASTE_SUM/1e6} kt/yr")
+print(f"Total plastic: {PLASTIC_SUM/1e6} kt/yr")
+print(f"Total biomass: {BIOMASS_SUM/1e6} kt/yr")
 
 plants_clean.to_csv("data/plants_clean.csv", index=False)

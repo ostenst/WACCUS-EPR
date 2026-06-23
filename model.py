@@ -460,13 +460,14 @@ def plan_CCU(plant, c, x, l):
     Q_heat_target = Qdh_steam_old + plant["Qfgc"]  # [MWth] baseline DH + FGC obligation
 
     P = P_old * (1 - Qreb / Qsteam)  # [MWel]
-    P = P - Pcapture - PH2 - wcomp_co2_mwel - wcomp_h2_mwel - wcomp_recycle_mwel  # [MWel]
+    P = P - Pcapture - PH2 - wcomp_recycle_mwel  # [MWel]
 
     Q_delivered = Qdh_steam_old * (1 - Qreb / Qsteam) + plant["Qfgc"]  # [MWth] Qfgc unaffected by reboiler
     Q_delivered = Q_delivered + sum(Qcool_CO2) + sum(Qcool_H2)  # [MWth] compressor cooling to network
     Qrec_hex = x["q_hex"] * Qreb  # [MWth]
-    Qrec_elec = x["q_electrolyzer"] * PH2  # [MWth]
-    Qavailable = Qrec_hex + Qrec_elec * x["heat_optimism"]  # [MWth] assumed "free" heat exchange
+    # Qrec_elec = x["q_electrolyzer"] * PH2  # [MWth]
+    Qloss_elec = PH2 - QH2 # [MWth] electrolyzer heat loss
+    Qavailable = Qrec_hex + Qloss_elec * x["heat_optimism"]  # [MWth] assumed "free" heat exchange
     Qdiff = Q_heat_target - (Q_delivered + Qavailable)  # [MWth]
     Whp = 0
     if Qdiff < 0:
@@ -671,7 +672,7 @@ def plan_gasifier(
     n_c_gasifier_pl = fuel.n_c_pl - n_c_combustor_pl  # [kmolC/yr]
     n_h_gasifier_yr = h_ratio_pl * n_c_gasifier_pl + h_ratio_bio * n_c_gasifier_bio  # [kmolH/yr]
 
-    q_combustor = (
+    q_combustor_yr = (
         (n_c_combustor_pl * 12.0 + h_ratio_pl * n_c_combustor_pl * 1.0 + o_ratio_pl * n_c_combustor_pl * 16.0) * fuel.lhv_pl
         + (n_c_combustor_bio * 12.0 + h_ratio_bio * n_c_combustor_bio * 1.0 + o_ratio_bio * n_c_combustor_bio * 16.0) * fuel.lhv_bio
     )  # [MJ/yr]
@@ -682,27 +683,32 @@ def plan_gasifier(
     if debug:
         print(
             "plan_gasifier input energy [MJ/yr]",
-            q_combustor,
+            q_combustor_yr,
             q_gasifier_yr,
-            q_combustor / (q_combustor + q_gasifier_yr),
-            fuel.e_input_mj_yr / (q_combustor + q_gasifier_yr),
+            q_combustor_yr / (q_combustor_yr + q_gasifier_yr),
+            fuel.e_input_mj_yr / (q_combustor_yr + q_gasifier_yr),
         )
 
     lhv_ch3oh = c["LHV_CH3OH"] * 32.0  # [MJ/kmol]
     q_gasifier = q_gasifier_yr / (flh * 3600.0)  # [MWth]
-    q_combustor = q_combustor / (flh * 3600.0)  # [MWth]
+    q_combustor = q_combustor_yr / (flh * 3600.0)  # [MWth]
     q_methanol = q_gasifier * frac_energy  # [MWth]
 
-    n_c_methanol_base = q_methanol / lhv_ch3oh  # [kmolC/s]
+    n_c_methanol_base = q_methanol / lhv_ch3oh  # [kmolC/s] methanol yield excluding any hydrogenation
     n_c_gasifier = n_c_gasifier_yr / (flh * 3600.0)  # [kmolC/s]
     n_co2_syngas = n_c_gasifier - n_c_methanol_base  # [kmolCO2/s]
     n_co_syngas = n_c_gasifier - n_co2_syngas  # [kmolCO/s]
-    n_h2_syngas = 2.0 * n_co_syngas  # [kmolH2/s]
+    n_h2_syngas = 2.0 * n_co_syngas  # [kmolH2/s] before additional hydrogenation, our syngas must have the composition 2H2:1CO to create CH3OH
 
-    n_h2o_gasifier = n_c_gasifier  # [kmolH2O/s]
+    n_h2o_gasifier = n_c_gasifier  # [kmolH2O/s] assume 1 mol H2O steam is added per mol CHyOx (like Beiron's initial guess)
     n_h2o_syngas = (n_h_gasifier_yr / (flh * 3600.0)) + 2.0 * n_h2o_gasifier - 2.0 * n_h2_syngas  # [kmolH/s]
     n_h2o_syngas /= 2.0  # [kmolH2O/s]
 
+    if any(x < 0 for x in [n_h2_syngas, n_co_syngas, n_co2_syngas, n_h2o_syngas]):
+        raise ValueError(
+            f"Negative syngas component detected: "
+            f"H2={n_h2_syngas}, CO={n_co_syngas}, CO2={n_co2_syngas}, H2O={n_h2o_syngas}"
+        )
     n_syngas = n_h2_syngas + n_co_syngas + n_co2_syngas + n_h2o_syngas  # [kmol/s]
     q_syngas = n_h2_syngas * c["LHV_H2_MJ_PER_KMOL"] + n_co_syngas * c["LHV_CO_MJ_PER_KMOL"]  # [MWth]
     syngas_mix = {
@@ -786,7 +792,9 @@ def plan_gasifier(
         x["opex_var_gasification_eur_per_mwh_fuel"] * cepci_adjustment(c, c["CEPCI_opex_gasification_ref"])
     )
     opex_var_gasif_meur = opex_var_gasif_eur_per_mwh * fuel.e_input_mj_yr / 3600.0 * 1e-6  # [MEUR/a]
-    opex_gasif_meur_a = opex_fix_gasif_meur + opex_var_gasif_meur  # [MEUR/a]
+    opex_gasif_gross_meur_a = opex_fix_gasif_meur + opex_var_gasif_meur  # [MEUR/a] before heat credit
+    opex_heat_recovery_meur_a = (q_loss_combustor + q_loss_electrolyzer * x["heat_optimism"]) * flh * x["celc"] * x["cheat"] * 1e-6  # [MEUR/a] combustor waste-heat credit
+    opex_gasif_meur_a = opex_gasif_gross_meur_a - opex_heat_recovery_meur_a  # [MEUR/a] net gasification OPEX
 
     w_comp_mwel = w_recycle  # [MWel]
     cepci_h2_adj = cepci_adjustment(c, c["CEPCI_h2_ref"])  # [-]
@@ -809,6 +817,8 @@ def plan_gasifier(
             capex_gasif_meur,
             capex_compression_meur,
             capex_electrolyzer_meur,
+            "heat_recovery_opex",
+            opex_heat_recovery_meur_a,
         )
 
     return {
@@ -840,7 +850,9 @@ def plan_gasifier(
         "capex_sorting_meur": capex_sorting_meur,  # [MEUR]
         "opex_sorting_meur_a": opex_sorting_meur_a,  # [MEUR/a]
         "capex_gasif_meur": capex_gasif_meur,  # [MEUR]
-        "opex_gasif_meur_a": opex_gasif_meur_a,  # [MEUR/a]
+        "opex_gasif_gross_meur_a": opex_gasif_gross_meur_a,  # [MEUR/a]
+        "opex_heat_recovery_meur_a": opex_heat_recovery_meur_a,  # [MEUR/a] credit (combustor losses)
+        "opex_gasif_meur_a": opex_gasif_meur_a,  # [MEUR/a] net after heat credit
         "capex_compression_meur": capex_compression_meur,  # [MEUR]
         "opex_compression_meur_a": opex_compression_meur_a,  # [MEUR/a]
         "capex_electrolyzer_meur": capex_electrolyzer_meur,  # [MEUR]
@@ -976,7 +988,8 @@ def levelize_all_replacement_costs(
         "eur_t_gasif_capex": levelize_meur_capex_to_eur_per_t_methanol(
             gasifier["capex_gasif_meur"], annual_methanol_t_per_yr, x, debug=debug
         ),
-        "eur_t_gasif_opex": gasifier["opex_gasif_meur_a"] * 1e6 / annual_methanol_t_per_yr,
+        "eur_t_gasif_opex": gasifier["opex_gasif_gross_meur_a"] * 1e6 / annual_methanol_t_per_yr,
+        "eur_t_heat_recovery": -gasifier["opex_heat_recovery_meur_a"] * 1e6 / annual_methanol_t_per_yr,
         "eur_t_comp_capex": levelize_meur_capex_to_eur_per_t_methanol(
             gasifier["capex_compression_meur"], annual_methanol_t_per_yr, x, debug=debug
         ),
@@ -1000,6 +1013,8 @@ def _gasifier_central_costs(gasifier: Dict[str, Any]) -> Dict[str, float]:
         "capex_compression_meur": gasifier["capex_compression_meur"],
         "capex_electrolyzer_meur": gasifier["capex_electrolyzer_meur"],
         "opex_sorting_meur_a": gasifier["opex_sorting_meur_a"],
+        "opex_gasif_gross_meur_a": gasifier["opex_gasif_gross_meur_a"],
+        "opex_heat_recovery_meur_a": gasifier["opex_heat_recovery_meur_a"],
         "opex_gasif_meur_a": gasifier["opex_gasif_meur_a"],
         "opex_compression_meur_a": gasifier["opex_compression_meur_a"],
         "opex_electrolyzer_meur_a": gasifier["opex_electrolyzer_meur_a"],
@@ -1072,18 +1087,18 @@ def plot_replacement_cost_breakdown(
 
     lev_labels = [
         "Truck\nOPEX", "HP\nCAPEX", "HP\nOPEX", "Sort\nCAPEX", "Sort\nOPEX",
-        "Gasif.\nCAPEX", "Gasif.\nOPEX", "H2 comp.\nCAPEX", "H2 comp.\nOPEX",
+        "Gasif.\nCAPEX", "Gasif.\nOPEX", "Heat\nrec.", "H2 comp.\nCAPEX", "H2 comp.\nOPEX",
         "El.\nCAPEX", "El.\nOPEX",
     ]
     lev_vals = [
         lev["eur_t_truck_opex"], lev["eur_t_hp_capex"], lev["eur_t_hp_opex"],
         lev["eur_t_sort_capex"], lev["eur_t_sort_opex"], lev["eur_t_gasif_capex"],
-        lev["eur_t_gasif_opex"], lev["eur_t_comp_capex"], lev["eur_t_comp_opex"],
-        lev["eur_t_electrolyzer_capex"], lev["eur_t_electrolyzer_opex"],
+        lev["eur_t_gasif_opex"], lev["eur_t_heat_recovery"], lev["eur_t_comp_capex"],
+        lev["eur_t_comp_opex"], lev["eur_t_electrolyzer_capex"], lev["eur_t_electrolyzer_opex"],
     ]
     lev_colors = [
         "#66CCEE", "#EE6677", "#EE6677", "#4477AA", "#4477AA",
-        "#228833", "#228833", "#CCBB44", "#CCBB44", "#AA3377", "#AA3377",
+        "#228833", "#228833", "#1ABC9C", "#CCBB44", "#CCBB44", "#AA3377", "#AA3377",
     ]
     bl_x = range(len(lev_vals))
     ax_lev.bar(bl_x, lev_vals, color=lev_colors, edgecolor="black", linewidth=0.6)
@@ -1628,12 +1643,11 @@ def WACCUS_EPR(
 
     q_reb = 3.5,            # [MJ/kgCO2] [2.5-3.5] [Soroodan, 2026]
     q_hex = 0.64,           # [MWth/MWreb] [Beiron, 2022] heat recovery from capture reboiler
-    q_electrolyzer = 0.154,  # [MWth/MWel] [Jacobsson & Palmgren, 2025] electrolyzer waste heat
     p_capture = 0.1,        # [MWh/tCO2] [Beiron, 2022]
     p_condition = 0.37,     # [MJ/kgCO2] [Kumar, 2023]
     COP = 3,                # [MWth/MWel]
     eta_electrolyzer = 0.699, # [MWH2/MWel] Table2.1 MSc Jacobsson & Palmgren (2025)
-    heat_optimism = 0.15,    # [-] [0-1.0] [0-100%] optimistic assumption on heat recovery, from condensers at distillation
+    heat_optimism = 0.15,    # [-] [0-1.0] [0-100%] optimistic assumption on heat recovery from electrolyzers
     opex_var_sorting_sek_per_t_waste = 200.0,  # [SEK/t waste] Brista basis
     opex_var_gasification_eur_per_mwh_fuel = 1.4,  # [EUR/MWh_fuel] Beiron 2026
 
@@ -1647,11 +1661,11 @@ def WACCUS_EPR(
     camine = 44,            # [SEK/tCO2] [Ramboll-Malmö, 2023]
     celc = 50,              # [EUR/MWh]
     cheat = 0.75,           # [% of elc]
-    pmethanol = 550,        # [EUR/t] [MSc Omar & Widgren, 2025]
+    pmethanol = 650,        # [EUR/t] [MSc Omar & Widgren, 2025]
 
     shipping_case = "pessimist_1Mt", # The main transport uncertainty! Dictates 1Mt, 2Mt, or 3Mt costs.
     storage = "oygarden",   # ["oygarden", "kalundborg"]
-    storage_cost = 20, # [EUR/tCO2]
+    storage_cost = 20, # [EUR/tCO2] https://www.globalccsinstitute.com/wp-content/uploads/2025/12/Cost-of-CO2-Storage-1225.pdf
     transport_cost_factor = 1.0,  # [-] scales CCS/replacement transport stack
 
     CRC = 100,              # [EUR/tCO2]
@@ -1664,26 +1678,22 @@ def WACCUS_EPR(
     # Replacement (centralized gasification) — process and cost references
     n_replacement_cases = 10,  # [-] cumulative cases: 1 … n largest plants by m_tot
     FLH_gasifier = 8000.0,  # [h/yr] hub full-load hours
-    RW_EVAP_MJ_PER_KG = 2.5,  # [MJ/kg] water evaporation
     LHV_H2_MJ_PER_KMOL = 243.0,  # [MJ/kmolH2]
     LHV_CO_MJ_PER_KMOL = 286.0,  # [MJ/kmolCO]
     LHV_CH3OH = 21.1,  # [MJ/kg]
     recycle_ratio = 3.0,  # [-] recycle compression multiplier
-    n_steam_assumed = 1.0,  # [kmolH2O/kmolC]
-    air_ratio_combustor = 1.2,  # [-]
-    q_wgs_mj_per_kmol = 43.0,  # [MJ/kmol] WGS thermal term
-    gasified_carbon_fraction = 0.70,  # [-] fraction of C to gasifier branch
-    frac_combustor_pl = 0.25,  # [-] share of combustor C that is biogenic
-    frac_energy = 0.60,  # [-] share of fuel energy ending up in syngas
+    gasified_carbon_fraction = 0.70,  # [-] fraction of C to gasifier branch [Ecoplanta]
+    frac_combustor_pl = 0.25,  # [-] share of combustor C that is plastic
+    frac_energy = 0.60,  # [-] share of gasified fuel energy ending up in methanol [check Alberto Alamia]
     eta_boiler = 0.85,  # [-] boiler efficiency (plot-only loss bar at replaced sites)
 
-    ADJUST_CEPCI = False,  # [-] if False, all CEPCI escalation factors are 1.0
+    ADJUST_CEPCI = True,  # [-] if False, all CEPCI escalation factors are 1.0
     CEPCI_target = 900,  # [-] [University of Manchester, 2025] cost evaluation year
     CEPCI_sorting_ref = 900,  # [-] Tekniska Verken quote year
     CEPCI_opex_sorting_ref = 816,  # [-] Brista OPEX base year
     CEPCI_gasification_ref = 600,  # [-] ECOPLANTA CAPEX base
     CEPCI_opex_gasification_ref = 900,  # [-] Beiron OPEX year
-    CEPCI_h2_ref = 600,  # [-] electrolyzer / compression CAPEX base
+    CEPCI_h2_ref = 900,  # [-] electrolyzer / compression CAPEX base
 
     # Reference CAPEX — specific (× installed MW; no capacity_ref)
     capex_ref_hp_keur_per_mwth = 860,  # [kEUR/MWth] heat pump [Bergander & Hellander, 2024]
@@ -1719,13 +1729,9 @@ def WACCUS_EPR(
 
         "n_replacement_cases": n_replacement_cases,
         "FLH_gasifier": FLH_gasifier,
-        "RW_EVAP_MJ_PER_KG": RW_EVAP_MJ_PER_KG,
         "LHV_H2_MJ_PER_KMOL": LHV_H2_MJ_PER_KMOL,
         "LHV_CO_MJ_PER_KMOL": LHV_CO_MJ_PER_KMOL,
         "recycle_ratio": recycle_ratio,
-        "n_steam_assumed": n_steam_assumed,
-        "air_ratio_combustor": air_ratio_combustor,
-        "q_wgs_mj_per_kmol": q_wgs_mj_per_kmol,
         "gasified_carbon_fraction": gasified_carbon_fraction,
         "frac_combustor_pl": frac_combustor_pl,
         "frac_energy": frac_energy,
@@ -1750,7 +1756,7 @@ def WACCUS_EPR(
     x = {
         "q_reb": q_reb,
         "q_hex": q_hex,
-        "q_electrolyzer": q_electrolyzer,
+        # "q_electrolyzer": q_electrolyzer,
         "p_capture": p_capture,
         "p_condition": p_condition,
         "COP": COP,
@@ -1971,7 +1977,7 @@ def WACCUS_EPR(
     KPI8 = 0.0  # [ktCO2f/yr] fossil CO2 at hub combustor (Replacement only)
     KPI9 = 0.0  # [ktCO2b/yr] biogenic CO2 at hub combustor (Replacement only)
 
-    KPI10 = 0.0  # [MWe] new power capacity required
+    KPI10 = 0.0  # Mitigation/Recovery: new equipment capacity [MWe]; Replacement: hub + site electrical demand [MWel]
     KPI11 = 0.0  # [TWh/yr] new power required
 
     KPI12 = plastic_supply / 1e6  # [Mtpl/yr] targeted plastic supply
@@ -1980,7 +1986,8 @@ def WACCUS_EPR(
     KPI15 = remaining_fund / 1e6 # [MEUR/yr] remaining subsidies
     KPI16 = granulate_inc * 100 # [%] granulate price increase
     KPI17 = products_inc * 100 # [%] products price increase
-    replacement_cost = float("nan")  # [EUR/t methanol] Replacement levelized cost if subsidized
+    replacement_cost = float("nan")  # [EUR/t MeOH] subsidized Replacement only (cost gap > 0); NaN if profitable vs pmethanol
+    replacement_cost_financed = float("nan")  # [EUR/t MeOH] financed Replacement hub; NaN if no affordable case
 
     plants_lookup = c["plants_df"].set_index("Name")
 
@@ -2029,8 +2036,9 @@ def WACCUS_EPR(
             KPI8 = combustor_co2_kt_yr * (1.0 - gasifier["frac_bio_combustor"])  # [ktCO2f/yr] hub combustor
             KPI9 = combustor_co2_kt_yr * gasifier["frac_bio_combustor"]  # [ktCO2b/yr] hub combustor
             replacement = selected_case["replacement"]
-            KPI10 = gasifier["power_input_mwel"] + replacement["p_site_deficit_mwel"]
+            KPI10 = gasifier["power_input_mwel"] + replacement["p_site_deficit_mwel"]  # [MWel] hub + site deficit
             KPI11 = (gasifier["p_energy_mwh_yr"] + replacement["p_energy_mwh_yr"]) / 1e6  # [TWh/yr]
+            replacement_cost_financed = float(selected_case["levelized"]["eur_t_total"])
 
         subsidized_case = next((rc for rc in replacement_cases if rc.get("Subsidized")), None)
         if subsidized_case is not None:
@@ -2062,6 +2070,7 @@ def WACCUS_EPR(
     results["KPI16"] = KPI16
     results["KPI17"] = KPI17
     results["replacement_cost"] = replacement_cost
+    results["replacement_cost_financed"] = replacement_cost_financed
     return results
 
 if __name__ == "__main__":

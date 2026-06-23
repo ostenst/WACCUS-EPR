@@ -61,8 +61,9 @@ def ema_WACCUS_EPR(**kwargs):
     """EMA entry point: return scalar outcomes only (no bids / replacement_cases)."""
     results = WACCUS_EPR(**kwargs)
     out = {f"KPI{i}": float(results[f"KPI{i}"]) for i in range(1, 18)}
-    rc = results.get("replacement_cost", float("nan"))
-    out["replacement_cost"] = float(rc) if pd.notna(rc) else float("nan")
+    for key in ("replacement_cost", "replacement_cost_financed"):
+        val = results.get(key, float("nan"))
+        out[key] = float(val) if pd.notna(val) else float("nan")
     return out
 
 
@@ -97,18 +98,10 @@ model.constants = [
     Constant("eta_is", 0.80),
     
     Constant("FLH_gasifier", 8000.0),
-    Constant("RW_EVAP_MJ_PER_KG", 2.5),
     Constant("LHV_H2_MJ_PER_KMOL", 243.0),
     Constant("LHV_CO_MJ_PER_KMOL", 286.0),
     Constant("LHV_CH3OH", 21.1),
-
     Constant("recycle_ratio", 3.0),
-    Constant("n_steam_assumed", 1.0),
-    Constant("air_ratio_combustor", 1.2),
-    Constant("q_wgs_mj_per_kmol", 43.0),
-    Constant("gasified_carbon_fraction", 0.70),
-    Constant("frac_combustor_pl", 0.25),
-    Constant("frac_energy", 0.70),
 
     # Reference CAPEX + capacity — scales as (capacity / capacity_ref)^k
     Constant("capex_ref_capture_keur", 3.7e9 * 0.091 / 1000),  # [kEUR]
@@ -120,7 +113,7 @@ model.constants = [
     Constant("capex_ref_gasification_meur", 749_729_639 * 1e-6),  # [MEUR]
     Constant("capacity_ref_gasification_t_methanol_per_yr", 237_000.0),  # [t methanol/yr]
 
-    Constant("ADJUST_CEPCI", False),  # [-] escalate overnight CAPEX to CEPCI_target
+    Constant("ADJUST_CEPCI", True),  # [-] escalate overnight CAPEX to CEPCI_target
     Constant("CEPCI_target", 900),  # [-] cost evaluation year
     Constant("CEPCI_reference", 600),
     Constant("CEPCI_capture_reference", 900),
@@ -129,13 +122,13 @@ model.constants = [
     Constant("CEPCI_opex_sorting_ref", 816),
     Constant("CEPCI_gasification_ref", 600),
     Constant("CEPCI_opex_gasification_ref", 900),
-    Constant("CEPCI_h2_ref", 600),
+    Constant("CEPCI_h2_ref", 900),
 ]
 
 # [X] Uncertainties — deep uncertainty + EPR context (fixed within scenario)
 model.uncertainties = [
     CategoricalParameter("EPR_products", [True, False]),
-    CategoricalParameter("EPR_fee", [50, 100, 200, 300, 400]),
+    CategoricalParameter("EPR_fee", [100, 200, 300, 400, 500]),
     RealParameter("baseline_granulates", 1_200_000, 1_300_000),
     RealParameter("inc_granulates", 0.00, 0.30),
     RealParameter("shift_granulates", 0.00, 0.40),
@@ -150,10 +143,13 @@ model.uncertainties = [
     RealParameter("eta_electrolyzer", 0.675, 0.725),
     RealParameter("q_reb", 2.7, 3.7),
     RealParameter("q_hex", 0.62, 0.66),  # [MWth/MWreb]
-    RealParameter("q_electrolyzer", 0.150, 0.158),  # [MWth/MWel]
     RealParameter("p_capture", 0.08, 0.12),
     RealParameter("p_condition", 0.30, 0.45),
-    RealParameter("heat_optimism", 0.00, 1.00),
+    RealParameter("heat_optimism", 0.00, 1.00), # [0-100%] recovery from electrolyzers
+
+    RealParameter("gasified_carbon_fraction", 0.65, 0.75), # [-] 0.70 central value, fraction of C to gasifier branch [Ecoplanta]
+    RealParameter("frac_combustor_pl", 0.15, 0.35), # [-] 0.25 central value, share of combustor C that is plastic
+    RealParameter("frac_energy", 0.55, 0.65), # [-] 0.60 central value, share of gasified fuel energy ending up in methanol [check Alberto Alamia]
 
     RealParameter("celc", 30, 70), # SEA Scenarier över Sveriges energisystem
     RealParameter("cheat", 0.50, 0.95),
@@ -166,19 +162,19 @@ model.uncertainties = [
         ["optimist_0.5Mt", "pessimist_0.5Mt", "optimist_1Mt", "pessimist_1Mt"],
     ),
     CategoricalParameter("storage", ["oygarden", "kalundborg"]),
-    RealParameter("storage_cost", 20, 80),
-    RealParameter("transport_cost_factor", 0.90, 1.10),  # [-] CCS + replacement haul transport
+    RealParameter("storage_cost", 5, 58), # GlobalCCSInstitute report 
+    RealParameter("transport_cost_factor", 0.80, 1.20),  # [-] CCS + replacement haul transport
 
     RealParameter("k", 0.62, 0.72),
     RealParameter("dr", 0.06, 0.09),
     RealParameter("t", 20, 30),
     RealParameter("capex_ref_hp_keur_per_mwth", 800, 920),  # [kEUR/MWth]
-    RealParameter("capex_ref_h2_keur_per_mwel", 2000, 3000),  # [kEUR/MWel]
+    RealParameter("capex_ref_h2_keur_per_mwel", 410, 690),  # [kEUR/MWel]
     RealParameter("capex_ref_train_eur", 8_000_000, 9_000_000),  # [EUR] fixed train @ 15 wagons × 60 t/wagon
     RealParameter("capex_ref_synthesis_meur", 1.60, 2.00),  # [MEUR] ∝ (m_methanol [t/d])^-0.315
     RealParameter("opex_var_sorting_sek_per_t_waste", 190.0, 210.0),  # [SEK/t waste]
     RealParameter("opex_var_gasification_eur_per_mwh_fuel", 1.35, 1.45),  # [EUR/MWh_fuel]
-    RealParameter("opex_fix", 0.02, 0.04),  # [-] fixed OPEX as fraction of overnight CAPEX
+    RealParameter("opex_fix", 0.03, 0.05),  # [-] fixed OPEX as fraction of overnight CAPEX
 ]
 
 # [L] Levers — EPR design only (three policies compared within each scenario)
@@ -197,7 +193,7 @@ model.outcomes = [
     ScalarOutcome("KPI7"),   # [ktCO2f/yr] residual fossil CO2
     ScalarOutcome("KPI8"),   # [ktCO2f/yr] hub combustor fossil CO2 (Replacement)
     ScalarOutcome("KPI9"),   # [ktCO2b/yr] hub combustor biogenic CO2 (Replacement)
-    ScalarOutcome("KPI10"),  # [MWe] new power capacity
+    ScalarOutcome("KPI10"),  # Mitigation/Recovery: new equipment capacity [MWe]; Replacement: hub + site electrical demand [MWel]
     ScalarOutcome("KPI11"),  # [TWh/yr] new power
     ScalarOutcome("KPI12"),  # [Mtpl/yr] targeted plastic supply
     ScalarOutcome("KPI13"),  # [EUR/tpl] EPR fee
@@ -205,7 +201,8 @@ model.outcomes = [
     ScalarOutcome("KPI15"),  # [MEUR/yr] remaining subsidies
     ScalarOutcome("KPI16"),  # [%] granulate price increase
     ScalarOutcome("KPI17"),  # [%] products price increase
-    ScalarOutcome("replacement_cost"),  # [EUR/t methanol] subsidized Replacement only
+    ScalarOutcome("replacement_cost"),  # [EUR/t MeOH] subsidized Replacement only (cost gap > 0); NaN if profitable vs pmethanol
+    ScalarOutcome("replacement_cost_financed"),  # [EUR/t MeOH] financed Replacement hub (KPI1 > 0); NaN if no affordable case
 ]
 
 if __name__ == "__main__":
@@ -257,10 +254,15 @@ if __name__ == "__main__":
         .round(4)
         .to_string()
     )
-    repl = results_df.loc[
+    repl_sub = results_df.loc[
         results_df["EPR_design"] == "Replacement", "replacement_cost"
     ].dropna()
-    if len(repl):
-        print(f"\nSubsidized Replacement cost: n={len(repl)}, mean={repl.mean():.1f} EUR/t methanol")
+    repl_fin = results_df.loc[
+        results_df["EPR_design"] == "Replacement", "replacement_cost_financed"
+    ].dropna()
+    if len(repl_sub):
+        print(f"\nSubsidized Replacement cost: n={len(repl_sub)}, mean={repl_sub.mean():.1f} EUR/t methanol")
+    if len(repl_fin):
+        print(f"Financed Replacement cost: n={len(repl_fin)}, mean={repl_fin.mean():.1f} EUR/t methanol")
     print("\nSaved results/results.csv, regret_by_policy.csv, replacement_cost_by_scenario.png")
     print("Run plot.py for remaining KPI boxplots.")

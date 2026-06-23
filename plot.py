@@ -5,7 +5,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 EPR_DESIGN_ORDER = ["Mitigation", "Recovery", "Replacement"]
-EPR_FEE_LEVELS = [50, 100, 200, 300, 400]
+EPR_FEE_LEVELS = [100, 200, 300, 400, 500]
 FEE_SENSITIVITY_KPIS = ["KPI1", "KPI6", "KPI11", "KPI16"]
 
 FEE_COLORS = {
@@ -23,7 +23,7 @@ KPI_LABELS = {
     "KPI7": "Residual fossil CO₂ [kt/a]",
     "KPI8": "Hub combustor CO₂f [kt/a]",
     "KPI9": "Hub combustor CO₂b [kt/a]",
-    "KPI10": "New power capacity [MWe]",
+    "KPI10": "New power (capacity or hub demand) [MW]",
     "KPI11": "New power [TWh/a]",
     "KPI12": "Plastic supply [Mtpl/a]",
     "KPI13": "EPR fee [EUR/tpl]",
