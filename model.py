@@ -1,4 +1,5 @@
 import os
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, List
 
@@ -354,9 +355,8 @@ def plan_CCS(plant, c, x, l):
     biogenic = 1 - fossil                                           # [tbiogenic/t] 
     FCCS = annual_CO2 * fossil                                # [ktCO2/yr]
     BECCS = annual_CO2 * biogenic                             # [ktCO2/yr]
-    if x["CRC"] < x["ETS"]:
-        x["CRC"] = x["ETS"] # In such cases (~50%), CRCs are assumed integrated into the ETS
-    strike_price = cost_CCS - biogenic * x["CRC"]                        # [EUR/tCO2] relative to a fossil ETS reference price
+    crc_eff = max(x["CRC"], x["ETS"])  # when CRC < ETS, assume integrated into ETS
+    strike_price = (cost_CCS - x["ETS"]) * fossil + (cost_CCS - crc_eff) * biogenic  # [EUR/tCO2] avg breakeven after ETS (fossil) + CRC (biogenic)
 
     opex_fix_eur_yr = OPEX_fix * annual_CO2 * 1000.0
     opex_makeup_eur_yr = OPEX_makeup * annual_CO2 * 1000.0
@@ -479,6 +479,8 @@ def plan_CCU(plant, c, x, l):
     Ppenalty = (P_old - P) * FLH  # [MWh/yr] site electricity (incl. recycle compression)
     Qpenalty = (Q_heat_target - Q_delivered) * FLH  # [MWh/yr]
     Pnew_capacity = P_old - P  # [MWel] rated new electrical equipment
+
+    Qlosses = plant["Qwaste"] + plant["Qfgc"] + abs(P) - (Q_delivered + QCH3OH)
 
     # Estimate CAPEX and OPEX
     annual_methanol_kt = annual_CO2 * 32.0 / 44.0  # [kt methanol/a] from captured CO2 stoichiometry
@@ -868,6 +870,7 @@ def plan_gasifier(
         "wcomp_recycle_mwel": w_recycle,  # [MWel]
         "power_input_mwel": power_input_mwel,  # [MWel]
         "p_energy_mwh_yr": power_input_mwel * flh,  # [MWh/yr]
+        "q_district_heat_mwth": q_loss_combustor + q_loss_electrolyzer * x["heat_optimism"],  # [MWth] district heat from hub losses
     }
 
 def plan_replacements(plants_slice: pd.DataFrame, c: dict, x: dict, debug: bool = False) -> Dict[str, Any]:
@@ -1610,6 +1613,93 @@ def plot_recovery_energy_breakdown(
     plt.close(fig)
 
 
+def safe_plant_key(name: str) -> str:
+    """Sanitize plant name for EMA / CSV outcome column keys."""
+    return re.sub(r"[^\w]+", "_", str(name).strip())
+
+
+def plant_outcome_column_names(plants_df: pd.DataFrame) -> List[str]:
+    """Scalar outcome names for per-plant power, carbon, levelized CCS/CCU costs (+ hub for Replacement)."""
+    cols: List[str] = []
+    for name in plants_df["Name"]:
+        key = safe_plant_key(name)
+        cols.extend([
+            f"plant_{key}_power_mw",
+            f"plant_{key}_heat_mwth",
+            f"plant_{key}_carbon_ktc",
+            f"plant_{key}_ccs_cost_eur_tco2",
+            f"plant_{key}_ccu_cost_eur_tmeoh",
+        ])
+    cols.extend(["hub_power_mw", "hub_recycle_power_mw", "hub_carbon_ktc", "q_district_heat_hub"])
+    return cols
+
+
+def build_plant_map_outcomes(
+    c: dict,
+    EPR_design: str,
+    bids: List[Dict[str, Any]],
+    replacement_cases: List[Dict[str, Any]],
+    debug: bool = False,
+) -> Dict[str, float]:
+    """Per-plant power penalty [MW], carbon treated [ktC/yr], and levelized CCS/CCU costs."""
+    outcomes: Dict[str, float] = {}
+    for name in c["plants_df"]["Name"]:
+        key = safe_plant_key(name)
+        outcomes[f"plant_{key}_power_mw"] = 0.0
+        outcomes[f"plant_{key}_heat_mwth"] = 0.0
+        outcomes[f"plant_{key}_carbon_ktc"] = 0.0
+        outcomes[f"plant_{key}_ccs_cost_eur_tco2"] = float("nan")
+        outcomes[f"plant_{key}_ccu_cost_eur_tmeoh"] = float("nan")
+    outcomes["hub_power_mw"] = float("nan")
+    outcomes["hub_recycle_power_mw"] = float("nan")
+    outcomes["hub_carbon_ktc"] = float("nan")
+    outcomes["q_district_heat_hub"] = float("nan")
+
+    if EPR_design == "Mitigation":
+        for bid in bids:
+            key = safe_plant_key(bid["Name"])
+            outcomes[f"plant_{key}_ccs_cost_eur_tco2"] = float(bid["cost_details"]["cost_CCS"])
+            if not bid["Financed"]:
+                continue
+            outcomes[f"plant_{key}_power_mw"] = max(0.0, float(bid["Pnew_capacity"]))
+            outcomes[f"plant_{key}_heat_mwth"] = float(bid["cost_details"]["energy"]["q_heat_delivered_mwth"])
+            co2_stored_kt = float(bid["FCCS"]) + float(bid["BECCS"])  # [ktCO2/yr]
+            outcomes[f"plant_{key}_carbon_ktc"] = co2_stored_kt * 12.0 / 44.0  # [ktC/yr]
+
+    elif EPR_design == "Recovery":
+        for bid in bids:
+            key = safe_plant_key(bid["Name"])
+            outcomes[f"plant_{key}_ccu_cost_eur_tmeoh"] = float(bid["cost_details"]["cost_CCU"])
+            if not bid["Financed"]:
+                continue
+            outcomes[f"plant_{key}_power_mw"] = max(0.0, float(bid["Pnew_capacity"]))
+            outcomes[f"plant_{key}_heat_mwth"] = float(bid["cost_details"]["energy"]["q_heat_delivered_mwth"])
+            co2_to_meoh_kt = float(bid["FCCU"]) + float(bid["BCCU"])  # [ktCO2/yr]
+            outcomes[f"plant_{key}_carbon_ktc"] = co2_to_meoh_kt * 12.0 / 44.0  # [ktC/yr]
+
+    elif EPR_design == "Replacement":
+        selected_case = next((rc for rc in replacement_cases if rc["Financed"]), None)
+        if selected_case is not None:
+            gasifier = selected_case["gasifier"]
+            annual_methanol_kt = float(gasifier["annual_methanol_t_yr"]) / 1000.0  # [kt/a]
+            outcomes["hub_power_mw"] = float(gasifier["power_input_mwel"])  # [MWel]
+            outcomes["hub_recycle_power_mw"] = float(gasifier["w_recycle_mwel"])  # [MWel] excl. electrolyzer
+            outcomes["hub_carbon_ktc"] = annual_methanol_kt * 12.0 / 32.0  # [ktC/yr]
+            outcomes["q_district_heat_hub"] = float(gasifier["q_district_heat_mwth"])  # [MWth]
+
+            per_plant = {p["plant_name"]: p for p in selected_case["replacement"]["per_plant"]}
+            for plant_name in selected_case["plants_slice"]["Name"]:
+                key = safe_plant_key(plant_name)
+                part = per_plant[plant_name]
+                outcomes[f"plant_{key}_power_mw"] = float(part["power_deficit_mwel"])  # [MWel] HP + lost CHP export
+                outcomes[f"plant_{key}_heat_mwth"] = float(part["heat_out_mwth"])  # [MWth] HP heat output
+                outcomes[f"plant_{key}_carbon_ktc"] = 0.0
+
+    if debug:
+        print(f"build_plant_map_outcomes {EPR_design}:", outcomes)
+    return outcomes
+
+
 def WACCUS_EPR(
     # [C] Constants
     EPR_design="Recovery", # [Mitigation, Recovery, Replacement]
@@ -1799,8 +1889,9 @@ def WACCUS_EPR(
     products_inc = EPR_fee / (price_products * CPI2025/CPI2015 * SEK_to_EUR) # [-]
 
     # (2) Simulate EPR subsidies per case
+    bids: List[Dict[str, Any]] = []
+    replacement_cases: List[Dict[str, Any]] = []
     if EPR_design == "Mitigation":
-        bids = []
         for _, plant in plants_df.iterrows():
             strike_price, FCCS, BECCS, Ppenalty, Pnew_capacity, Qpenalty, cost_details = plan_CCS(plant, c, x, l)
             bids.append({"Name": plant["Name"], "Design": EPR_design, "strike_price": strike_price,
@@ -1827,7 +1918,6 @@ def WACCUS_EPR(
                 )
 
     elif EPR_design == "Recovery":
-        bids = []
         for _, plant in plants_df.iterrows():
             strike_price, FCCU, BCCU, Qmethanol, Ppenalty, Pnew_capacity, Qpenalty, cost_details = plan_CCU(plant, c, x, l)
             bids.append({"Name": plant["Name"], "Design": EPR_design, "strike_price": strike_price,
@@ -1859,7 +1949,7 @@ def WACCUS_EPR(
         if len(plants) < n_cases:
             raise ValueError(f"Need at least {n_cases} plants in plants_df; found {len(plants)}.")
 
-        replacement_cases: List[Dict[str, Any]] = []
+        replacement_cases = []
 
         for n_plants in range(1, n_cases + 1):
             subset = plants.iloc[:n_plants]
@@ -1909,8 +1999,8 @@ def WACCUS_EPR(
     if EPR_design == "Mitigation":
         fco2_key, bco2_key = "FCCS", "BECCS"
         for bid in bids:
-            cost_gap_raw = (bid["strike_price"] - x["ETS"]) * (bid[fco2_key] + bid[bco2_key]) * 1000  # [EUR/yr]
-            bid["cost_gap_plant"] = max(0.0, cost_gap_raw)  # [EUR/yr] profitable vs ETS → no subsidy
+            cost_gap_raw = bid["strike_price"] * (bid[fco2_key] + bid[bco2_key]) * 1000  # [EUR/yr] ETS on FCCS, CRC on BECCS (in strike_price)
+            bid["cost_gap_plant"] = max(0.0, cost_gap_raw)  # [EUR/yr] profitable after carbon revenues → no subsidy
         remaining_fund = available_subsidies
         for bid in sorted(bids, key=lambda b: b["strike_price"]):
             subsidy_requested = bid["cost_gap_plant"] * (1 + c["profit"])  # [EUR/yr]
@@ -2071,6 +2161,9 @@ def WACCUS_EPR(
     results["KPI17"] = KPI17
     results["replacement_cost"] = replacement_cost
     results["replacement_cost_financed"] = replacement_cost_financed
+
+    plant_outcomes = build_plant_map_outcomes(c, EPR_design, bids, replacement_cases, debug=False)
+    results.update(plant_outcomes)
     return results
 
 if __name__ == "__main__":
@@ -2088,7 +2181,7 @@ if __name__ == "__main__":
     shipping_costs[cost_columns] = shipping_costs[cost_columns] * SEK_to_EUR
     # Run the model
     results = WACCUS_EPR(
-        EPR_design="Replacement", # Mitigation, Recovery, Replacement 
+        EPR_design="Mitigation", # Mitigation, Recovery, Replacement 
         plants_df=plants_df, 
         shipping_costs=shipping_costs,
         compression_costs=compression_costs,

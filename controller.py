@@ -10,8 +10,7 @@ See: https://emaworkbench.readthedocs.io/en/latest/indepth_tutorial/open-explora
 """
 
 import pandas as pd
-from model import WACCUS_EPR, get_CoolProp, shipping_adjustment
-from plot import calculate_regret, plot_regret_by_policy, plot_replacement_cost_across_scenarios
+from model import WACCUS_EPR, get_CoolProp, shipping_adjustment, plant_outcome_column_names
 from ema_workbench import (
     Model,
     RealParameter,
@@ -64,6 +63,9 @@ def ema_WACCUS_EPR(**kwargs):
     for key in ("replacement_cost", "replacement_cost_financed"):
         val = results.get(key, float("nan"))
         out[key] = float(val) if pd.notna(val) else float("nan")
+    for col in plant_outcome_column_names(plants_df):
+        val = results.get(col, float("nan"))
+        out[col] = float(val) if pd.notna(val) else float("nan")
     return out
 
 
@@ -76,6 +78,50 @@ def add_scenario_ids(df, uncertainty_cols):
     out = df.copy()
     out["scenario_id"] = out.groupby(uncertainty_cols, dropna=False).ngroup()
     return out
+
+
+def calculate_regret(
+    results_df,
+    regret_specs,
+    policies=None,
+    scenario_col="scenario_id",
+    policy_col="EPR_design",
+    debug=False,
+):
+    """Within-scenario regret vs the best policy on each KPI."""
+    if policies is None:
+        policies = POLICY_ORDER
+    if scenario_col not in results_df.columns:
+        raise KeyError(f"Column {scenario_col!r} missing — run controller.py first.")
+
+    rows = []
+    for scenario_id, group in results_df.groupby(scenario_col):
+        by_policy = group.set_index(policy_col)
+        for policy in policies:
+            if policy not in by_policy.index:
+                continue
+            row = {scenario_col: scenario_id, policy_col: policy}
+            if "EPR_fee" in group.columns:
+                row["EPR_fee"] = group["EPR_fee"].iloc[0]
+            for regret_name, spec in regret_specs.items():
+                kpi = spec["kpi"]
+                sense = spec["sense"]
+                values = by_policy[kpi]
+                if sense == "min":
+                    best = values.min()
+                    row[regret_name] = float(values.loc[policy] - best)
+                elif sense == "max":
+                    best = values.max()
+                    row[regret_name] = float(best - values.loc[policy])
+                else:
+                    raise ValueError(f"{regret_name}: sense must be 'min' or 'max', got {sense!r}")
+            rows.append(row)
+
+    regret_df = pd.DataFrame(rows)
+    if debug:
+        for name in regret_specs:
+            print(f"{name}: mean={regret_df[name].mean():.4g}, max={regret_df[name].max():.4g}")
+    return regret_df
 
 
 model = Model("WACCUSEPR", function=ema_WACCUS_EPR)
@@ -203,11 +249,11 @@ model.outcomes = [
     ScalarOutcome("KPI17"),  # [%] products price increase
     ScalarOutcome("replacement_cost"),  # [EUR/t MeOH] subsidized Replacement only (cost gap > 0); NaN if profitable vs pmethanol
     ScalarOutcome("replacement_cost_financed"),  # [EUR/t MeOH] financed Replacement hub (KPI1 > 0); NaN if no affordable case
-]
+] + [ScalarOutcome(col) for col in plant_outcome_column_names(plants_df)]
 
 if __name__ == "__main__":
     ema_logging.log_to_stderr(ema_logging.INFO)
-    n_scenarios = 1000
+    n_scenarios = 10000
     n_policies = len(POLICY_ORDER)  # 3: Mitigation, Recovery, Replacement
 
     results = perform_experiments(
@@ -235,14 +281,6 @@ if __name__ == "__main__":
     )
     regret_df.to_csv("results/regret_by_policy.csv", index=False)
 
-    plot_regret_by_policy(
-        regret_df,
-        REGRET_SPECS,
-        out_path="results/regret_by_policy.png",
-        debug=True,
-    )
-    plot_replacement_cost_across_scenarios(results_df, debug=True)
-
     n_exp = len(experiments)
     print(f"Completed {n_exp} runs ({n_scenarios} scenarios × {n_policies} policies).")
     print("\nOutcome means (all runs):")
@@ -264,5 +302,5 @@ if __name__ == "__main__":
         print(f"\nSubsidized Replacement cost: n={len(repl_sub)}, mean={repl_sub.mean():.1f} EUR/t methanol")
     if len(repl_fin):
         print(f"Financed Replacement cost: n={len(repl_fin)}, mean={repl_fin.mean():.1f} EUR/t methanol")
-    print("\nSaved results/results.csv, regret_by_policy.csv, replacement_cost_by_scenario.png")
-    print("Run plot.py for remaining KPI boxplots.")
+    print("\nSaved results/results.csv, regret_by_policy.csv")
+    print("Run plot.py for figures.")
