@@ -1,0 +1,24 @@
+City,Plant Name,Fuel (W=waste B=biomass),Heat output (MWheat),Electric output (MWe),Existing FGC heat output (MWheat),Year of commissioning,Live steam temperature (degC),Live steam pressure (bar)
+Boden,Boden KVV P17,W,15,5,4,2008,400,40
+Boden,Boden KVV P18,W,30,9,9,2008,380,40
+Bollnas,Saverstaverket,W,23,7,5,2011,423,42
+Borlange,Backelund,W,23,7,0,2008,400,40
+Boras,Ryaverket G2,W,60,25,10,1965,405,50
+Bro,Hogbytorp,W,70,29,22,2019,420,50
+Eksjo,Eksjo KVV,W,18,2,8,2005,220,16
+Halmstad,Kristinehedsverket ,W,33,9,9,2003,400,40
+Hassleholm,Beleverket,W,18,2,8,2003,220,16
+Jonkoping,Torsvik 1 KVV ,W,42,14,0,2006,380,41
+Karlskoga,Karlskoga KVV,W,50,15,16,2004,300,28
+Kiruna,Kiruna KVV,W,40.5,9.4,11,1991,220,16
+Lidkoping,Filen Panncentral T1 ,W,36,4,8,2002,220,16
+Lidkoping,Filen Panncentral T2 ,W,24,6,0,2008,400,30
+Ljungby,Ljungsjo 1 ,W,12,3,0,2006,220,16
+Nybro,Transtorp,W,16,6,0,2016,410,60
+Skovde,Varmekallan Block 3 ,W,13,1.7,0,2005,215,16
+Sundsvall,Korstaverket 2,W,39,21,7,2006,420,45
+Uddevalla,Lillesjoverket,W,28,10,7,2009,400,40
+Uppsala,Uppsala Block 5 ,W,50,10.2,11,2010,212,14
+Umea,Dava 1 ,W,40,15,14,2000,400,40
+Vastervik,Stegeholmsverket,W,15,5,4,2013,410,40
+orebro,SAKAB Kumla ,W,35,6.1,9,2003,350,16

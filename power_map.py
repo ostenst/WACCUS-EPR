@@ -21,6 +21,8 @@ BUBBLE_SCALE_DIVISOR = 10.0
 HEAT_COLOR = cm.magma(0.65)
 POWER_COLOR = cm.magma(0.12)
 HUB_RECYCLE_COLOR = cm.magma(0.0)
+OTHER_PLANT_COLOR = "0.55"
+OTHER_PLANT_EDGE = "0.25"
 
 # Draw order: first entry = back, last = front (z-order increases with index).
 PLOTTING_ORDER = {
@@ -28,6 +30,76 @@ PLOTTING_ORDER = {
     "Recovery": ["plant_power", "plant_heat"],
     "Replacement": ["hub_power", "hub_recycle_power", "plant_heat", "plant_power"],
 }
+
+
+def _normalize_plant_name(name) -> str:
+    return str(name).strip().lower()
+
+
+def _load_other_plants_heat(
+    main_names,
+    other_path: str = "data/plants_other.csv",
+    coords_path: str = "data/plants_other_coordinates.csv",
+    debug: bool = False,
+) -> pd.DataFrame:
+    """Other Swedish CHP sites: coords + heat capacity [MWth] (heat + FGC)."""
+    other = pd.read_csv(other_path)
+    coords = pd.read_csv(coords_path)
+    coords["Latitude"] = pd.to_numeric(coords["Latitude"], errors="coerce")
+    coords["Longitude"] = pd.to_numeric(coords["Longitude"], errors="coerce")
+
+    other["_key"] = other["Plant Name"].map(_normalize_plant_name)
+    coords["_key"] = coords["Name"].map(_normalize_plant_name)
+    merged = other.merge(
+        coords[["_key", "Latitude", "Longitude"]],
+        on="_key",
+        how="inner",
+    )
+    main_keys = {_normalize_plant_name(n) for n in main_names}
+    merged = merged[~merged["_key"].isin(main_keys)].copy()
+    merged["heat_mwth"] = (
+        pd.to_numeric(merged["Heat output (MWheat)"], errors="coerce")
+        + pd.to_numeric(merged["Existing FGC heat output (MWheat)"], errors="coerce")
+    )
+
+    if debug:
+        missing_coords = other.loc[
+            ~other["_key"].isin(coords["_key"]), "Plant Name"
+        ].tolist()
+        if missing_coords:
+            print(f"Other plants without coordinates (skipped): {missing_coords}")
+        print(f"Other plants for power map: {len(merged)}")
+    return merged
+
+
+def _plot_other_plants(
+    ax,
+    other_plants: pd.DataFrame,
+    scales: dict,
+    zorder: int = 3,
+    debug: bool = False,
+) -> None:
+    """Gray heat bubbles for other CHP sites (reference capacity, not EMA outcomes)."""
+    for _, row in other_plants.iterrows():
+        mw = float(row["heat_mwth"])
+        lon, lat = float(row["Longitude"]), float(row["Latitude"])
+        if mw <= 0 or not np.isfinite(lon) or not np.isfinite(lat):
+            continue
+        area = _scatter_area_from_mw(mw, scales["heat_scale"])
+        if area <= 0:
+            continue
+        if debug:
+            print(f"_plot_other_plants: {row['Plant Name']} heat={mw:.1f} MWth")
+        ax.scatter(
+            [lon],
+            [lat],
+            s=[area],
+            c=[OTHER_PLANT_COLOR],
+            alpha=0.75,
+            edgecolors=OTHER_PLANT_EDGE,
+            linewidths=0.8,
+            zorder=zorder,
+        )
 
 
 def plant_metric_columns(plants_df: pd.DataFrame) -> tuple[list[str], list[str], list[str]]:
@@ -406,6 +478,10 @@ def plot_power_map(
     ax.set_xticks([])
     ax.set_yticks([])
 
+    main_names = pd.read_csv("data/plants_clean.csv")["Name"]
+    other_plants = _load_other_plants_heat(main_names, debug=debug)
+    _plot_other_plants(ax, other_plants, scales, zorder=3, debug=debug)
+
     draw_order = PLOTTING_ORDER.get(policy)
     if draw_order is None:
         raise KeyError(f"No PLOTTING_ORDER entry for policy {policy!r}")
@@ -454,6 +530,11 @@ def plot_power_map(
             )
 
     legend_handles = [
+        Line2D(
+            [0], [0], marker="o", color="w", markerfacecolor=OTHER_PLANT_COLOR,
+            markeredgecolor=OTHER_PLANT_EDGE, markersize=10,
+            label="Other CHP heat capacity [MWth]",
+        ),
         Line2D(
             [0], [0], marker="o", color="w", markerfacecolor=HEAT_COLOR,
             markeredgecolor="black", markersize=11, label="Heat output [MWth]",

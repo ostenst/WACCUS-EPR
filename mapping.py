@@ -6,6 +6,56 @@ import matplotlib.cm as cm
 import numpy as np
 
 
+def _normalize_plant_name(name) -> str:
+    return str(name).strip().lower()
+
+
+def _other_plant_co2_calibration(
+    plants_path: str = "data/plants.csv",
+    debug: bool = False,
+) -> tuple[float, float]:
+    """Median Qwaste/Qdh and Total/Qwaste [ktCO2/yr per MW] from characterized main plants."""
+    main = pd.read_csv(plants_path)
+    qwaste_per_qdh = (main["Qwaste"] / main["Qdh"]).median()
+    total_per_qwaste = (main["Total"] / main["Qwaste"]).median()
+    if debug:
+        print(
+            f"Other-plant CO2 calibration: Qwaste/Qdh={qwaste_per_qdh:.3f}, "
+            f"Total/Qwaste={total_per_qwaste:.3f} ktCO2/yr per MW"
+        )
+    return float(qwaste_per_qdh), float(total_per_qwaste)
+
+
+def _load_other_plants(main_names, debug: bool = False) -> pd.DataFrame:
+    """Merge other-plant capacities with coordinates; drop sites already in main set."""
+    other = pd.read_csv("data/plants_other.csv")
+    coords = pd.read_csv("data/plants_other_coordinates.csv")
+    coords["Latitude"] = pd.to_numeric(coords["Latitude"], errors="coerce")
+    coords["Longitude"] = pd.to_numeric(coords["Longitude"], errors="coerce")
+
+    other["_key"] = other["Plant Name"].map(_normalize_plant_name)
+    coords["_key"] = coords["Name"].map(_normalize_plant_name)
+    merged = other.merge(
+        coords[["_key", "Latitude", "Longitude"]],
+        on="_key",
+        how="inner",
+    )
+    main_keys = {_normalize_plant_name(n) for n in main_names}
+    merged = merged[~merged["_key"].isin(main_keys)].copy()
+
+    qdh = pd.to_numeric(merged["Heat output (MWheat)"], errors="coerce")
+    qwaste_ratio, total_per_qwaste = _other_plant_co2_calibration(debug=debug)
+    qwaste_est = qdh * qwaste_ratio
+    merged["total_ktco2"] = qwaste_est * total_per_qwaste
+
+    if debug:
+        missing_coords = other.loc[~other["_key"].isin(coords["_key"]), "Plant Name"].tolist()
+        if missing_coords:
+            print(f"Other plants without coordinates (skipped): {missing_coords}")
+        print(f"Other plants to plot: {len(merged)}")
+    return merged
+
+
 def plot_europe(mode="CCS", debug=False):
     """Plot a part of Europe using the shapefile data."""
     if debug:
@@ -120,6 +170,20 @@ def plot_europe(mode="CCS", debug=False):
 
     ax.scatter(lons, lats, s=sizes, color=plant_color, alpha=0.8,
                edgecolor='black', linewidth=1, zorder=5)
+
+    other_plants = _load_other_plants(plants_df["Name"], debug=debug)
+    if not other_plants.empty:
+        other_sizes = other_plants["total_ktco2"] * scaling
+        ax.scatter(
+            other_plants["Longitude"],
+            other_plants["Latitude"],
+            s=other_sizes,
+            color="0.55",
+            alpha=0.75,
+            edgecolor="0.25",
+            linewidth=0.8,
+            zorder=4,
+        )
 
     ax.set_xticks([])
     ax.set_yticks([])

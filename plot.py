@@ -5,12 +5,14 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.lines import Line2D
 
 EPR_FEE_LEVELS = [100, 200, 300, 400, 500]
 EPR_DESIGN_ORDER = ["Mitigation", "Recovery", "Replacement"]
 MEOH_TO_CO2EQ = 44.0 / 32.0  # kt MeOH → kt CO₂eq (full oxidation stoichiometry)
 FIG2_HIGH_COLOR = "#62A7A6"  # high CRC/ETS or pmethanol
 FIG2_LOW_COLOR = "#DE4968"  # low CRC/ETS or pmethanol
+FIG2_KPI7_COLOR = plt.cm.magma(0.65)  # mean residual fossil CO₂ per KPI14 bin
 FIG4_CCS_COLOR = "#4477AA"
 FIG4_CCU_COLOR = "#62A7A6"
 FEE_COLORS = {
@@ -190,9 +192,25 @@ def _style_boxplot(bp, colors):
         artist.set_linewidth(1.5)
 
 
+def _visual_jitter(
+    x: np.ndarray,
+    y: np.ndarray,
+    x_span: float,
+    y_span: float,
+    frac: float = 0.008,
+    seed: int = 0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Small random displacement for scatter visibility only (not physical variation)."""
+    rng = np.random.default_rng(seed)
+    x_scale = frac * (x_span if x_span > 0 else 1.0)
+    y_scale = frac * (y_span if y_span > 0 else 1.0)
+    return x + rng.normal(0.0, x_scale, len(x)), y + rng.normal(0.0, y_scale, len(y))
+
+
 def fig1_upstream_impacts(
     results_df: pd.DataFrame,
     out_path: str = "results/fig1_upstream_impacts.png",
+    scatter_jitter_frac: float = 0.006,
     show: bool = False,
     debug: bool = False,
 ) -> plt.Figure | None:
@@ -200,6 +218,8 @@ def fig1_upstream_impacts(
     Two-panel figure:
       (1) KPI14 vs KPI12 by EPR fee — deterministic lines + scenario scatter.
       (2) KPI16 & KPI17 vs EPR fee — grouped boxplots, shared y-axis [%].
+
+    Scatter points in panel 1 are slightly jittered for visibility only.
     """
     needed = {"EPR_fee", "KPI12", "KPI14", "KPI16", "KPI17"}
     if not needed.issubset(results_df.columns):
@@ -218,6 +238,8 @@ def fig1_upstream_impacts(
 
     fig, (ax_supply, ax_prices) = plt.subplots(1, 2, figsize=(10, 5.5))
     plotted_lines = 0
+    kpi12_span = float(df["KPI12"].max() - df["KPI12"].min())
+    kpi14_span = float(df["KPI14"].max() - df["KPI14"].min())
 
     for fee in fee_levels:
         sub = df.loc[df["EPR_fee"] == fee].sort_values("KPI12")
@@ -225,9 +247,17 @@ def fig1_upstream_impacts(
             continue
 
         color = FEE_COLORS.get(fee, plt.cm.magma(0.5))
+        x_plot, y_plot = _visual_jitter(
+            sub["KPI12"].values,
+            sub["KPI14"].values,
+            kpi12_span,
+            kpi14_span,
+            frac=scatter_jitter_frac,
+            seed=int(fee),
+        )
         ax_supply.scatter(
-            sub["KPI12"],
-            sub["KPI14"],
+            x_plot,
+            y_plot,
             s=18,
             color=color,
             alpha=0.35,
@@ -300,17 +330,17 @@ def fig1_upstream_impacts(
     ax_prices.grid(axis="y", linestyle="--", alpha=0.4)
     ax_prices.text(
         0.40,
-        0.06,
-        "Lower boxes — product price increase [%]",
+        0.035,
+        "Lower boxes =\nProduct price increase [%]",
         transform=ax_prices.transAxes,
         fontsize=10,
         va="bottom",
         ha="left",
     )
     ax_prices.text(
-        0.35,
-        0.94,
-        "Upper boxes — granulate price increase [%]",
+        0.40,
+        0.85,
+        "Upper boxes =\nGranulate price increase [%]",
         transform=ax_prices.transAxes,
         fontsize=10,
         va="top",
@@ -322,78 +352,103 @@ def fig1_upstream_impacts(
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     if debug:
+        print(
+            f"fig1_upstream_impacts: scatter jitter frac={scatter_jitter_frac} "
+            f"(~{scatter_jitter_frac * kpi12_span:.3f} Mt, "
+            f"~{scatter_jitter_frac * kpi14_span:.1f} MEUR)"
+        )
         print(f"Saved {out_path}")
     if show:
         plt.show()
     return fig
 
 
+def _boxplot_by_kpi14(
+    df: pd.DataFrame,
+    y_col: str = "y",
+    overlay_col: str | None = None,
+    fossil_frac_col: str | None = None,
+    n_bins: int = 5,
+    debug: bool = False,
+) -> tuple[list[np.ndarray], list[str], list[int], list[float], list[float]]:
+    """Quantile-bin KPI14; return box data, labels, positions, overlay means, fossil frac means."""
+    use_cols = ["KPI14", y_col]
+    if overlay_col is not None:
+        use_cols.append(overlay_col)
+    if fossil_frac_col is not None:
+        use_cols.append(fossil_frac_col)
+    frame = df[use_cols].dropna(subset=["KPI14", y_col]).sort_values("KPI14")
+    if frame.empty:
+        return [], [], [], [], []
+
+    if len(frame) >= n_bins:
+        frame = frame.copy()
+        frame["_bin"] = pd.qcut(frame["KPI14"], q=n_bins, duplicates="drop")
+        grouped = (
+            frame.groupby("_bin", observed=True)["KPI14"]
+            .mean()
+            .sort_values()
+        )
+    else:
+        grouped = pd.Series({0: frame["KPI14"].mean()}, name="KPI14")
+        frame = frame.copy()
+        frame["_bin"] = 0
+
+    all_data: list[np.ndarray] = []
+    labels: list[str] = []
+    positions: list[int] = []
+    overlay_means: list[float] = []
+    fossil_frac_means: list[float] = []
+    for i, bin_key in enumerate(grouped.index):
+        sub = frame.loc[frame["_bin"] == bin_key]
+        vals = sub[y_col].values
+        all_data.append(vals if len(vals) else np.array([]))
+        labels.append(f"{grouped.iloc[i]:.0f}")
+        positions.append(i)
+        if overlay_col is not None:
+            overlay_means.append(float(sub[overlay_col].mean()))
+        if fossil_frac_col is not None:
+            fossil_frac_means.append(float(sub[fossil_frac_col].mean(skipna=True)))
+
+    if debug:
+        counts = [len(d) for d in all_data]
+        print(f"_boxplot_by_kpi14: {len(frame)} rows -> {len(all_data)} bins, n={counts}")
+    return all_data, labels, positions, overlay_means, fossil_frac_means
+
+
 def fig2_carbon_treated(
     results_df: pd.DataFrame,
     out_path: str = "results/fig2_carbon_treated.png",
-    n_bins: int = 15,
-    band_p_lo: float = 0.25,
-    band_p_hi: float = 0.75,
+    n_bins: int = 5,
     show: bool = False,
     debug: bool = False,
 ) -> plt.Figure | None:
     """
-    Three policy panels: total carbon treated [ktCO₂eq/a] vs KPI14, two curves per panel.
+    Three policy panels: carbon treated [ktCO₂eq/a] vs KPI14 — 5 box plots per panel.
 
-    Band default: 25th–75th percentile (IQR) of y within each KPI14 bin — middle half
-    of scenarios at similar subsidy levels, less dominated by unfunded vs fully funded tails.
-
-    Mitigation — KPI2+KPI3 [ktCO₂/a]:
-      (1) CRC > 150 and ETS > 150
-      (2) CRC < 150 and ETS < 150
-
-    Recovery & Replacement — (KPI4+KPI5) × 44/32 [ktCO₂eq/a]:
-      (1) pmethanol > 700 EUR/t
-      (2) pmethanol < 700 EUR/t
+    Mitigation — KPI2 + KPI3 [ktCO₂/a]; Recovery & Replacement — (KPI4 + KPI5) × 44/32.
+    All scenarios included (no CRC/ETS/pmethanol splits); KPI14 quantile bins per panel.
+    Mean KPI7 (residual fossil CO₂, ktCO₂/a ≈ ktCO₂eq) overlaid as dots per bin.
+    Box fill: grayscale by mean fossil fraction in bin (Mitigation: KPI2/(KPI2+KPI3);
+    Recovery/Replacement: KPI4/(KPI4+KPI5); darker = more fossil).
     """
-    needed = {
-        "EPR_design", "KPI2", "KPI3", "KPI4", "KPI5", "KPI14",
-        "CRC", "ETS", "pmethanol",
-    }
+    needed = {"EPR_design", "KPI2", "KPI3", "KPI4", "KPI5", "KPI7", "KPI14"}
     if not needed.issubset(results_df.columns):
         raise KeyError(f"results missing columns: {needed - set(results_df.columns)}")
 
     df = results_df[list(needed)].copy()
     df["KPI14"] = pd.to_numeric(df["KPI14"], errors="coerce")
-    df["CRC"] = pd.to_numeric(df["CRC"], errors="coerce")
-    df["ETS"] = pd.to_numeric(df["ETS"], errors="coerce")
-    df["pmethanol"] = pd.to_numeric(df["pmethanol"], errors="coerce")
-    for col in ("KPI2", "KPI3", "KPI4", "KPI5"):
+    for col in ("KPI2", "KPI3", "KPI4", "KPI5", "KPI7"):
         df[col] = pd.to_numeric(df[col], errors="coerce")
     df = df.dropna(subset=["EPR_design", "KPI14"])
 
-    subset_colors = (FIG2_HIGH_COLOR, FIG2_LOW_COLOR)  # high split first, low second
+    panel_y = {
+        "Mitigation": lambda d: d["KPI2"] + d["KPI3"],
+        "Recovery": lambda d: (d["KPI4"] + d["KPI5"]) * MEOH_TO_CO2EQ,
+        "Replacement": lambda d: (d["KPI4"] + d["KPI5"]) * MEOH_TO_CO2EQ,
+    }
     fig, axes = plt.subplots(1, 3, figsize=(10, 5), sharey=True)
     any_panel = False
-
-    panel_config = {
-        "Mitigation": {
-            "y": lambda d: d["KPI2"] + d["KPI3"],
-            "splits": [
-                ("CRC & ETS > 150", lambda d: (d["CRC"] > 150) & (d["ETS"] > 150)),
-                ("CRC & ETS < 150", lambda d: (d["CRC"] < 150) & (d["ETS"] < 150)),
-            ],
-        },
-        "Recovery": {
-            "y": lambda d: (d["KPI4"] + d["KPI5"]) * MEOH_TO_CO2EQ,
-            "splits": [
-                ("pmethanol > 700 EUR/t", lambda d: d["pmethanol"] > 700),
-                ("pmethanol < 700 EUR/t", lambda d: d["pmethanol"] < 700),
-            ],
-        },
-        "Replacement": {
-            "y": lambda d: (d["KPI4"] + d["KPI5"]) * MEOH_TO_CO2EQ,
-            "splits": [
-                ("pmethanol > 700 EUR/t", lambda d: d["pmethanol"] > 700),
-                ("pmethanol < 700 EUR/t", lambda d: d["pmethanol"] < 700),
-            ],
-        },
-    }
 
     for ax, policy in zip(axes, EPR_DESIGN_ORDER):
         base = df.loc[df["EPR_design"] == policy].copy()
@@ -403,37 +458,67 @@ def fig2_carbon_treated(
                 print(f"fig2_carbon_treated: no rows for {policy}")
             continue
 
-        cfg = panel_config[policy]
-        base["y"] = cfg["y"](base)
-        plotted = 0
+        base["y"] = panel_y[policy](base)
+        if policy == "Mitigation":
+            total_c = base["KPI2"] + base["KPI3"]
+            base["fossil_frac"] = np.where(total_c > 0, base["KPI2"] / total_c, np.nan)
+        else:
+            total_m = base["KPI4"] + base["KPI5"]
+            base["fossil_frac"] = np.where(total_m > 0, base["KPI4"] / total_m, np.nan)
 
-        for (label, mask_fn), color in zip(cfg["splits"], subset_colors):
-            sub = base.loc[mask_fn(base)].dropna(subset=["KPI14", "y"])
-            if len(sub) < 2:
-                if debug:
-                    print(f"fig2_carbon_treated {policy} {label}: n={len(sub)}, skip")
-                continue
+        box_data, x_labels, positions, kpi7_means, fossil_means = _boxplot_by_kpi14(
+            base,
+            y_col="y",
+            overlay_col="KPI7",
+            fossil_frac_col="fossil_frac",
+            n_bins=n_bins,
+            debug=debug,
+        )
+        if not box_data or not any(len(d) for d in box_data):
+            ax.set_title(policy, fontsize=13)
+            if debug:
+                print(f"fig2_carbon_treated: no box data for {policy}")
+            continue
 
-            grouped = _median_bands_by_x(
-                sub["KPI14"],
-                sub["y"],
-                n_bins=n_bins,
-                p_lo=band_p_lo,
-                p_hi=band_p_hi,
-                debug=debug,
+        if debug:
+            for pos, label, ff in zip(positions, x_labels, fossil_means):
+                ff_str = f"{ff:.4f}" if np.isfinite(ff) else "nan"
+                print(
+                    f"fig2_carbon_treated [{policy}] bin {pos + 1} "
+                    f"(KPI14~{label} MEUR): fossil_frac={ff_str}"
+                )
+
+        colors = [
+            plt.cm.gray_r(f) if np.isfinite(f) else (0.75, 0.75, 0.75, 1.0)
+            for f in fossil_means
+        ]
+        bp = ax.boxplot(
+            box_data,
+            positions=positions,
+            widths=0.55,
+            patch_artist=True,
+            manage_ticks=False,
+        )
+        _style_boxplot(bp, colors)
+
+        if kpi7_means:
+            ax.scatter(
+                positions,
+                kpi7_means,
+                s=72,
+                c=[FIG2_KPI7_COLOR] * len(positions),
+                edgecolors="black",
+                linewidths=0.8,
+                zorder=5,
             )
-            if grouped.empty:
-                continue
-            _plot_median_band(ax, grouped, color, label)
-            plotted += 1
 
+        ax.set_xticks(positions)
+        ax.set_xticklabels(x_labels, fontsize=10)
         ax.set_title(policy, fontsize=13)
-        ax.set_xlabel(KPI_LABELS["KPI14"], fontsize=12)
-        ax.tick_params(labelsize=11)
-        ax.grid(axis="both", linestyle="--", alpha=0.4)
-        if plotted:
-            ax.legend(fontsize=9, loc="best")
-            any_panel = True
+        ax.set_xlabel(f"{KPI_LABELS['KPI14']}", fontsize=12)
+        ax.tick_params(axis="y", labelsize=11)
+        ax.grid(axis="y", linestyle="--", alpha=0.4)
+        any_panel = True
 
     if not any_panel:
         plt.close(fig)
@@ -441,15 +526,36 @@ def fig2_carbon_treated(
             print("fig2_carbon_treated: no data to plot")
         return None
 
-    axes[0].set_ylabel("Carbon treated [ktCO₂eq/a]", fontsize=13)
-    fig.suptitle(
-        "Total carbon treated vs available subsidies\n"
-        f"Band: {int(band_p_lo * 100)}th–{int(band_p_hi * 100)}th percentile within KPI14 bins; "
-        "MeOH as CO₂eq (× 44/32)",
-        fontsize=14,
-        y=1.03,
+    axes[0].set_ylabel("Carbon capture capacity [ktCO₂eq/a]", fontsize=13)
+    # fig.suptitle(
+    #     "Total carbon treated vs available subsidies\n"
+    #     f"{n_bins} KPI14 quantile bins per policy; box shade = fossil fraction in bin, "
+    #     "dots = mean KPI7 (residual fossil CO₂); MeOH as CO₂eq (× 44/32)",
+    #     fontsize=14,
+    #     y=1.03,
+    # )
+    sm = plt.cm.ScalarMappable(cmap=plt.cm.gray_r, norm=plt.Normalize(vmin=0.0, vmax=1.0))
+    sm.set_array([])
+    fig.tight_layout(rect=[0, 0, 0.88, 0.96])
+    cbar_ax = fig.add_axes([0.89, 0.14, 0.02, 0.72]) # Adjusts colorbar position and size
+    cbar = fig.colorbar(sm, cax=cbar_ax)
+    cbar.set_label("Fossil fraction (mean)", fontsize=12)
+    cbar.ax.tick_params(labelsize=12)
+    axes[-1].legend(
+        handles=[
+            Line2D(
+                [0], [0], marker="s", color="w", markerfacecolor="0.5",
+                markeredgecolor="0.25", markersize=10, label="Carbon capture capacity\n(CCS/BECCS/methanol)",
+            ),
+            Line2D(
+                [0], [0], marker="o", color="w", markerfacecolor=FIG2_KPI7_COLOR,
+                markeredgecolor="black", markersize=9, label="Residual fossil CO₂ (mean)",
+            ),
+        ],
+        loc="upper right",
+        fontsize=9,
+        framealpha=0.9,
     )
-    fig.tight_layout()
 
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
