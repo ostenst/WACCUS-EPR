@@ -10,8 +10,10 @@ from matplotlib.lines import Line2D
 EPR_FEE_LEVELS = [100, 200, 300, 400, 500]
 EPR_DESIGN_ORDER = ["Mitigation", "Recovery", "Replacement"]
 MEOH_TO_CO2EQ = 44.0 / 32.0  # kt MeOH → kt CO₂eq (full oxidation stoichiometry)
-FIG2_HIGH_COLOR = "#62A7A6"  # high CRC/ETS or pmethanol
-FIG2_LOW_COLOR = "#DE4968"  # low CRC/ETS or pmethanol
+FIG2_HIGH_COLOR = "#62A7A6"  # high celc / pmethanol (Recovery & Replacement)
+FIG2_LOW_COLOR = "#DE4968"  # low celc / pmethanol (Recovery & Replacement)
+FIG3_CRC_HIGH_COLOR = "black"  # high CRC & ETS (Mitigation)
+FIG3_CRC_LOW_COLOR = "0.55"  # low CRC & ETS (Mitigation)
 FIG2_KPI7_COLOR = plt.cm.magma(0.65)  # mean residual fossil CO₂ per KPI14 bin
 FIG4_CCS_COLOR = "#4477AA"
 FIG4_CCU_COLOR = "#62A7A6"
@@ -32,13 +34,18 @@ KPI_LABELS = {
     "KPI9": "Hub combustor CO₂b [kt/a]",
     "KPI10": "New power (capacity or hub demand) [MW]",
     "KPI11": "New power [TWh/a]",
-    "KPI12": "Plastic supply [Mtpl/a]",
-    "KPI13": "EPR fee [EUR/tpl]",
-    "KPI14": "Available subsidies [MEUR/a]",
-    "KPI15": "Remaining subsidies [MEUR/a]",
+    "KPI12": "Plastic supply [Mtpl p.a.]",
+    "KPI13": "EPR fee [€/tpl]",
+    "KPI14": "Available subsidies [M€ p.a.]",
+    "KPI15": "Remaining subsidies [M€ p.a.]",
     "KPI16": "Granulate price increase [%]",
     "KPI17": "Products price increase [%]",
 }
+
+
+def _policy_panel_title(policy: str) -> str:
+    """Panel title with policy name in italics."""
+    return rf"$\it{{{policy}}}$"
 
 
 def load_ema_results(
@@ -162,20 +169,50 @@ def _plot_pct_line(
     ax,
     grouped: pd.DataFrame,
     color: str,
-    label: str,
+    label: str | None = None,
     linestyle: str = "-",
 ) -> None:
     """Solid/dashed line of % financed vs KPI14 bin centres."""
     grouped = grouped.sort_values("x")
-    ax.plot(
-        grouped["x"],
-        grouped["pct_financed"],
+    plot_kw = dict(
         color=color,
         linewidth=2.2,
         linestyle=linestyle,
-        label=label,
         zorder=4,
     )
+    if label is not None:
+        plot_kw["label"] = label
+    ax.plot(grouped["x"], grouped["pct_financed"], **plot_kw)
+
+
+def _fig3_shared_legend_handles() -> list[Line2D]:
+    """All fig3 line styles — Mitigation (CRC/ETS) plus CCU elc × MeOH combinations."""
+    return [
+        Line2D(
+            [0], [0], color=FIG3_CRC_HIGH_COLOR, lw=2.2, linestyle="-",
+            label="CRC & ETS > 150 €/t",
+        ),
+        Line2D(
+            [0], [0], color=FIG3_CRC_LOW_COLOR, lw=2.2, linestyle="-",
+            label="CRC & ETS < 150 €/t",
+        ),
+        Line2D(
+            [0], [0], color=FIG2_HIGH_COLOR, lw=2.2, linestyle="-",
+            label="Elc. price > 50 €/MWh, MeOH price > 700 €/t",
+        ),
+        Line2D(
+            [0], [0], color=FIG2_HIGH_COLOR, lw=2.2, linestyle="--",
+            label="Elc. price > 50 €/MWh, MeOH price < 700 €/t",
+        ),
+        Line2D(
+            [0], [0], color=FIG2_LOW_COLOR, lw=2.2, linestyle="-",
+            label="Elc. price < 50 €/MWh, MeOH price > 700 €/t",
+        ),
+        Line2D(
+            [0], [0], color=FIG2_LOW_COLOR, lw=2.2, linestyle="--",
+            label="Elc. price < 50 €/MWh, MeOH price < 700 €/t",
+        ),
+    ]
 
 
 def _style_boxplot(bp, colors):
@@ -270,7 +307,7 @@ def fig1_upstream_impacts(
             x_line * fee,
             color=color,
             linewidth=2.2,
-            label=f"{fee} EUR/tpl",
+            label=f"{fee} €/tpl",
             zorder=4,
         )
         plotted_lines += 1
@@ -289,8 +326,28 @@ def fig1_upstream_impacts(
         fontsize=13,
     )
     ax_supply.tick_params(labelsize=11)
-    ax_supply.legend(title="EPR fee", fontsize=9, title_fontsize=9, loc="best")
     ax_supply.grid(axis="both", linestyle="--", alpha=0.4)
+
+    beccs_auction_subsidy = 163.0  # [M€ p.a.]
+    ax_supply.axhline(
+        beccs_auction_subsidy,
+        color="black",
+        linestyle="--",
+        linewidth=1.5,
+        zorder=5,
+    )
+    ax_supply.annotate(
+        "BECCS auction\nsubsidy 2029-2046",
+        xy=(1.95, 50),
+        xytext=(4, 4),
+        textcoords="offset points",
+        fontsize=10,
+        ha="left",
+        va="bottom",
+        color="black",
+    )
+
+    ax_supply.legend(title="EPR fee", fontsize=9, title_fontsize=9, loc="best")
 
     # Panel 2: KPI16 & KPI17 boxplots by fee — color matches panel 1 fee lines
     box_width = 0.32
@@ -319,7 +376,7 @@ def fig1_upstream_impacts(
 
     ax_prices.set_xticks(range(len(fee_levels)))
     ax_prices.set_xticklabels([str(f) for f in fee_levels], fontsize=11)
-    ax_prices.set_xlabel("EPR fee [EUR/tpl]", fontsize=13)
+    ax_prices.set_xlabel("EPR fee [€/tpl]", fontsize=13)
     ax_prices.set_ylabel("Price increase [%]", fontsize=13)
     ax_prices.set_title(
         "Pass-through to granulate & product prices\n"
@@ -355,7 +412,7 @@ def fig1_upstream_impacts(
         print(
             f"fig1_upstream_impacts: scatter jitter frac={scatter_jitter_frac} "
             f"(~{scatter_jitter_frac * kpi12_span:.3f} Mt, "
-            f"~{scatter_jitter_frac * kpi14_span:.1f} MEUR)"
+            f"~{scatter_jitter_frac * kpi14_span:.1f} M€)"
         )
         print(f"Saved {out_path}")
     if show:
@@ -453,7 +510,7 @@ def fig2_carbon_treated(
     for ax, policy in zip(axes, EPR_DESIGN_ORDER):
         base = df.loc[df["EPR_design"] == policy].copy()
         if base.empty:
-            ax.set_title(policy, fontsize=13)
+            ax.set_title(_policy_panel_title(policy), fontsize=13)
             if debug:
                 print(f"fig2_carbon_treated: no rows for {policy}")
             continue
@@ -475,7 +532,7 @@ def fig2_carbon_treated(
             debug=debug,
         )
         if not box_data or not any(len(d) for d in box_data):
-            ax.set_title(policy, fontsize=13)
+            ax.set_title(_policy_panel_title(policy), fontsize=13)
             if debug:
                 print(f"fig2_carbon_treated: no box data for {policy}")
             continue
@@ -485,7 +542,7 @@ def fig2_carbon_treated(
                 ff_str = f"{ff:.4f}" if np.isfinite(ff) else "nan"
                 print(
                     f"fig2_carbon_treated [{policy}] bin {pos + 1} "
-                    f"(KPI14~{label} MEUR): fossil_frac={ff_str}"
+                    f"(KPI14~{label} M€): fossil_frac={ff_str}"
                 )
 
         colors = [
@@ -514,7 +571,7 @@ def fig2_carbon_treated(
 
         ax.set_xticks(positions)
         ax.set_xticklabels(x_labels, fontsize=10)
-        ax.set_title(policy, fontsize=13)
+        ax.set_title(_policy_panel_title(policy), fontsize=13)
         ax.set_xlabel(f"{KPI_LABELS['KPI14']}", fontsize=12)
         ax.tick_params(axis="y", labelsize=11)
         ax.grid(axis="y", linestyle="--", alpha=0.4)
@@ -526,7 +583,7 @@ def fig2_carbon_treated(
             print("fig2_carbon_treated: no data to plot")
         return None
 
-    axes[0].set_ylabel("Carbon capture capacity [ktCO₂eq/a]", fontsize=13)
+    axes[0].set_ylabel("Carbon capture capacity [ktCO₂eq p.a.]", fontsize=13)
     # fig.suptitle(
     #     "Total carbon treated vs available subsidies\n"
     #     f"{n_bins} KPI14 quantile bins per policy; box shade = fossil fraction in bin, "
@@ -569,18 +626,15 @@ def fig2_carbon_treated(
 def fig3_finance_robustness(
     results_df: pd.DataFrame,
     out_path: str = "results/fig3_finance_robustness.png",
-    n_bins: int = 15,
+    n_bins: int = 8,
     show: bool = False,
     debug: bool = False,
 ) -> plt.Figure | None:
     """
     Three policy panels: % of scenarios financing 10 plants (KPI1 = 10) vs KPI14.
 
-    Mitigation — two lines:
-      CRC & ETS > 150 (green), CRC & ETS < 150 (red).
-
-    Recovery & Replacement — four celc × pmethanol combinations:
-      green = celc > 50, red = celc < 50; solid = pmethanol > 700, dashed = pmethanol < 700.
+    Mitigation — CRC & ETS high/low (black/gray). Recovery & Replacement — four
+    elc × MeOH combinations (colour + linestyle). Shared legend below all panels.
     """
     needed = {
         "EPR_design", "KPI1", "KPI14", "CRC", "ETS", "celc", "pmethanol",
@@ -602,37 +656,37 @@ def fig3_finance_robustness(
 
     panel_config = {
         "Mitigation": [
-            ("CRC & ETS > 150", lambda d: (d["CRC"] > 150) & (d["ETS"] > 150), FIG2_HIGH_COLOR, "-"),
-            ("CRC & ETS < 150", lambda d: (d["CRC"] < 150) & (d["ETS"] < 150), FIG2_LOW_COLOR, "-"),
+            (lambda d: (d["CRC"] > 150) & (d["ETS"] > 150), FIG3_CRC_HIGH_COLOR, "-"),
+            (lambda d: (d["CRC"] < 150) & (d["ETS"] < 150), FIG3_CRC_LOW_COLOR, "-"),
         ],
         "Recovery": [
-            ("celc > 50, pmethanol > 700", lambda d: (d["celc"] > 50) & (d["pmethanol"] > 700), FIG2_HIGH_COLOR, "-"),
-            ("celc > 50, pmethanol < 700", lambda d: (d["celc"] > 50) & (d["pmethanol"] < 700), FIG2_HIGH_COLOR, "--"),
-            ("celc < 50, pmethanol > 700", lambda d: (d["celc"] < 50) & (d["pmethanol"] > 700), FIG2_LOW_COLOR, "-"),
-            ("celc < 50, pmethanol < 700", lambda d: (d["celc"] < 50) & (d["pmethanol"] < 700), FIG2_LOW_COLOR, "--"),
+            (lambda d: (d["celc"] > 50) & (d["pmethanol"] > 700), FIG2_HIGH_COLOR, "-"),
+            (lambda d: (d["celc"] > 50) & (d["pmethanol"] < 700), FIG2_HIGH_COLOR, "--"),
+            (lambda d: (d["celc"] < 50) & (d["pmethanol"] > 700), FIG2_LOW_COLOR, "-"),
+            (lambda d: (d["celc"] < 50) & (d["pmethanol"] < 700), FIG2_LOW_COLOR, "--"),
         ],
         "Replacement": [
-            ("celc > 50, pmethanol > 700", lambda d: (d["celc"] > 50) & (d["pmethanol"] > 700), FIG2_HIGH_COLOR, "-"),
-            ("celc > 50, pmethanol < 700", lambda d: (d["celc"] > 50) & (d["pmethanol"] < 700), FIG2_HIGH_COLOR, "--"),
-            ("celc < 50, pmethanol > 700", lambda d: (d["celc"] < 50) & (d["pmethanol"] > 700), FIG2_LOW_COLOR, "-"),
-            ("celc < 50, pmethanol < 700", lambda d: (d["celc"] < 50) & (d["pmethanol"] < 700), FIG2_LOW_COLOR, "--"),
+            (lambda d: (d["celc"] > 50) & (d["pmethanol"] > 700), FIG2_HIGH_COLOR, "-"),
+            (lambda d: (d["celc"] > 50) & (d["pmethanol"] < 700), FIG2_HIGH_COLOR, "--"),
+            (lambda d: (d["celc"] < 50) & (d["pmethanol"] > 700), FIG2_LOW_COLOR, "-"),
+            (lambda d: (d["celc"] < 50) & (d["pmethanol"] < 700), FIG2_LOW_COLOR, "--"),
         ],
     }
 
     for ax, policy in zip(axes, EPR_DESIGN_ORDER):
         base = df.loc[df["EPR_design"] == policy].copy()
         if base.empty:
-            ax.set_title(policy, fontsize=13)
+            ax.set_title(_policy_panel_title(policy), fontsize=13)
             if debug:
                 print(f"fig3_finance_robustness: no rows for {policy}")
             continue
 
         plotted = 0
-        for label, mask_fn, color, linestyle in panel_config[policy]:
+        for mask_fn, color, linestyle in panel_config[policy]:
             sub = base.loc[mask_fn(base)].dropna(subset=["KPI14", "KPI1"])
             if len(sub) < 2:
                 if debug:
-                    print(f"fig3_finance_robustness {policy} {label}: n={len(sub)}, skip")
+                    print(f"fig3_finance_robustness {policy}: n={len(sub)}, skip line")
                 continue
 
             grouped = _pct_financed_by_x(
@@ -644,16 +698,15 @@ def fig3_finance_robustness(
             )
             if grouped.empty:
                 continue
-            _plot_pct_line(ax, grouped, color, label, linestyle=linestyle)
+            _plot_pct_line(ax, grouped, color, label=None, linestyle=linestyle)
             plotted += 1
 
-        ax.set_title(policy, fontsize=13)
+        ax.set_title(_policy_panel_title(policy), fontsize=13)
         ax.set_xlabel(KPI_LABELS["KPI14"], fontsize=12)
         ax.tick_params(labelsize=11)
         ax.grid(axis="both", linestyle="--", alpha=0.4)
         ax.set_ylim(0.0, 100.0)
         if plotted:
-            ax.legend(fontsize=8, loc="best")
             any_panel = True
 
     if not any_panel:
@@ -662,17 +715,21 @@ def fig3_finance_robustness(
             print("fig3_finance_robustness: no data to plot")
         return None
 
-    axes[0].set_ylabel("10 plants financed [%]", fontsize=13)
-    fig.suptitle(
-        "Finance robustness — share of scenarios with all 10 plants financed\n"
-        "within KPI14 bins",
-        fontsize=14,
-        y=1.03,
+    axes[0].set_ylabel("Carbon capture robustness [%]", fontsize=13)
+    fig.tight_layout(rect=[0, 0.075, 1, 1])
+    fig.legend(
+        handles=_fig3_shared_legend_handles(),
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.06),
+        bbox_transform=fig.transFigure,
+        ncol=3,
+        fontsize=9,
+        framealpha=0.9,
+        borderaxespad=0.0,
     )
-    fig.tight_layout()
 
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    fig.savefig(out_path, dpi=150, bbox_inches="tight", pad_inches=0.05)
     if debug:
         print(f"Saved {out_path}")
     if show:

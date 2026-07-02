@@ -15,7 +15,7 @@ from model import safe_plant_key
 HUB_LAT = 58.527430
 HUB_LON = 15.079128
 POLICIES = ["Mitigation", "Recovery", "Replacement"]
-MAP_EXTENT = {"x_min": 10.0, "x_max": 20.0, "y_min": 55, "y_max": 61.0}
+MAP_EXTENT = {"x_min": 11.5, "x_max": 19.0, "y_min": 55, "y_max": 61.0}
 BUBBLE_SCALE = 1.2
 BUBBLE_SCALE_DIVISOR = 10.0
 HEAT_COLOR = cm.magma(0.65)
@@ -70,6 +70,11 @@ def _load_other_plants_heat(
             print(f"Other plants without coordinates (skipped): {missing_coords}")
         print(f"Other plants for power map: {len(merged)}")
     return merged
+
+
+def _policy_panel_title(policy: str) -> str:
+    """Panel title with policy name in italics."""
+    return rf"$\it{{{policy}}}$"
 
 
 def _plot_other_plants(
@@ -441,7 +446,7 @@ def _annotate_power_capacity(
         xytext=(lon, label_lat),
         ha="center",
         va="bottom",
-        fontsize=11,
+        fontsize=9,
         color="black",
         bbox=dict(boxstyle="round,pad=0.35", facecolor="white", edgecolor="none", alpha=0.75),
         zorder=25,
@@ -470,7 +475,7 @@ def plot_power_map(
     n_scenarios = int(hub["n_scenarios"].iloc[0]) if len(hub) else 0
 
     europe = gpd.read_file(europe_shp).to_crs("EPSG:4326")
-    fig, ax = plt.subplots(figsize=(7, 6), constrained_layout=True)
+    fig, ax = plt.subplots(figsize=(6, 6))
     europe.plot(ax=ax, edgecolor="black", facecolor="whitesmoke", linewidth=0.6)
     ax.set_xlim(MAP_EXTENT["x_min"], MAP_EXTENT["x_max"])
     ax.set_ylim(MAP_EXTENT["y_min"], MAP_EXTENT["y_max"])
@@ -499,7 +504,8 @@ def plot_power_map(
             ax,
             {"lon": HUB_LON, "lat": HUB_LAT, "power_mw": hub_recycle_power},
             scales,
-            f"Hub power excl. electrolyzer: {hub_recycle_power:.0f} MW",
+            f"If excl. electrolyzer: {hub_recycle_power:.0f} MW",
+            offset_factor=1.05,
             debug=debug,
         )
 
@@ -508,7 +514,8 @@ def plot_power_map(
             ax,
             max_power,
             scales,
-            f"Highest new capacity: {max_power['power_mw']:.0f} MW",
+            f"Largest: {max_power['power_mw']:.0f} MWe",
+            offset_factor=1.05,
             debug=debug,
         )
 
@@ -524,46 +531,43 @@ def plot_power_map(
                 ax,
                 max_hp,
                 scales,
-                f"Highest new HP capacity: {max_hp['power_mw']:.0f} MW",
-                offset_factor=2.35 if same_site else 1.15,
+                f"Largest HP: {max_hp['power_mw']:.0f} MWe",
+                offset_factor=2.35 if same_site else 1.05,
                 debug=debug,
             )
 
     legend_handles = [
         Line2D(
-            [0], [0], marker="o", color="w", markerfacecolor=OTHER_PLANT_COLOR,
+            [0], [0], marker="o", color="w", markerfacecolor=OTHER_PLANT_COLOR, alpha=0.75,
             markeredgecolor=OTHER_PLANT_EDGE, markersize=10,
-            label="Other CHP heat capacity [MWth]",
+            label="Unmodified waste-fired CHP [MWth]",
         ),
         Line2D(
-            [0], [0], marker="o", color="w", markerfacecolor=HEAT_COLOR,
-            markeredgecolor="black", markersize=11, label="Heat output [MWth]",
+            [0], [0], marker="o", color="w", markerfacecolor=HEAT_COLOR, alpha=0.75,
+            markeredgecolor="black", markersize=11, label="Required heat output [MWth]",
         ),
         Line2D(
-            [0], [0], marker="o", color="w", markerfacecolor=POWER_COLOR,
-            markeredgecolor="black", markersize=8, label="New power capacity [MW]",
+            [0], [0], marker="o", color="w", markerfacecolor=POWER_COLOR, alpha=0.75,
+            markeredgecolor="black", markersize=8, label="New power [MWe]",
         ),
     ]
     if policy == "Replacement":
         legend_handles.extend([
             Line2D(
-                [0], [0], marker="o", color="black", markerfacecolor=POWER_COLOR,
+                [0], [0], marker="o", color="black", markerfacecolor=POWER_COLOR, alpha=0.75,
                 markeredgecolor="black", markersize=10, linestyle="--",
-                label="Gasification hub new power [MW]",
+                label="Gasification plant new power [MWe]",
             ),
             Line2D(
                 [0], [0], marker="o", color="black", markerfacecolor=HUB_RECYCLE_COLOR,
                 markeredgecolor="black", markersize=9, linestyle="--",
-                label="Hub power excl. electrolyzer [MW]",
+                label="If excl. electrolyzer [MWe]",
             ),
         ])
 
-    ax.set_title(
-        f"{policy} — mean over {n_scenarios} scenarios (KPI1 = 10)\n"
-        "Bubble diameter ∝ heat [MWth] or new power [MW]",
-        fontsize=13,
-    )
-    ax.legend(handles=legend_handles, loc="lower left", fontsize=10, framealpha=0.85)
+    ax.set_title(_policy_panel_title(policy), fontsize=13, pad=3)
+    ax.legend(handles=legend_handles, loc="lower right", fontsize=9, framealpha=0.85)
+    fig.tight_layout()
 
     if out_path is None:
         out_path = f"results/power_map_{policy.lower()}.png"
