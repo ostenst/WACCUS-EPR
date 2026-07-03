@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.lines import Line2D
+from matplotlib.patches import Rectangle
 
 EPR_FEE_LEVELS = [100, 200, 300, 400, 500]
 EPR_DESIGN_ORDER = ["Mitigation", "Recovery", "Replacement"]
@@ -15,6 +16,11 @@ FIG2_LOW_COLOR = "#DE4968"  # low celc / pmethanol (Recovery & Replacement)
 FIG3_CRC_HIGH_COLOR = "black"  # high CRC & ETS (Mitigation)
 FIG3_CRC_LOW_COLOR = "0.55"  # low CRC & ETS (Mitigation)
 FIG2_KPI7_COLOR = plt.cm.magma(0.65)  # mean residual fossil CO₂ per KPI14 bin
+MAC_COVERED_COLOR = "0.55"  # abatement cost covered by carbon price
+MAC_UNCOVERED_COLOR = FIG2_KPI7_COLOR  # residual abatement cost
+MAC_DEFAULT_COSTS = [90.0, 100.0, 110.0, 120.0, 135.0, 150.0, 155.0, 165.0, 180.0, 195.0]
+MAC_DEFAULT_WIDTHS = [420.0, 400.0, 380.0, 350.0, 320.0, 300.0, 180.0, 160.0, 170.0, 150.0]
+MAC_HIGHLIGHT_COUNT = 6
 FIG4_CCS_COLOR = "#4477AA"
 FIG4_CCU_COLOR = "#62A7A6"
 FEE_COLORS = {
@@ -46,6 +52,41 @@ KPI_LABELS = {
 def _policy_panel_title(policy: str) -> str:
     """Panel title with policy name in italics."""
     return rf"$\it{{{policy}}}$"
+
+
+def _style_conceptual_arrow_axes(
+    ax,
+    x_max: float,
+    y_max: float,
+    n_x_ticks: int = 6,
+    n_y_ticks: int = 5,
+    debug: bool = False,
+) -> None:
+    """Arrow-style x/y axes with tick marks but no numeric labels."""
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["bottom"].set_visible(False)
+    ax.spines["left"].set_visible(False)
+
+    arrow_kw = dict(arrowstyle="-|>", color="black", lw=1.2, shrinkA=0, shrinkB=0)
+    ax.annotate("", xy=(x_max, 0.0), xytext=(0.0, 0.0), arrowprops=arrow_kw, clip_on=False)
+    ax.annotate("", xy=(0.0, y_max), xytext=(0.0, 0.0), arrowprops=arrow_kw, clip_on=False)
+
+    ax.set_xticks(np.linspace(0.0, x_max, n_x_ticks))
+    ax.set_yticks(np.linspace(0.0, y_max, n_y_ticks))
+    ax.set_xticklabels([])
+    ax.set_yticklabels([])
+    ax.tick_params(
+        axis="both",
+        which="major",
+        direction="out",
+        length=5,
+        width=0.9,
+        labelbottom=False,
+        labelleft=False,
+    )
+    if debug:
+        print(f"_style_conceptual_arrow_axes: x_max={x_max}, y_max={y_max}")
 
 
 def load_ema_results(
@@ -873,6 +914,96 @@ def fig4_plant_costs(
     return fig
 
 
+def fig_mac_stylized(
+    out_path: str = "results/mac_curve_stylized.png",
+    costs: list[float] | None = None,
+    widths: list[float] | None = None,
+    carbon_price: float = 80.0,
+    highlight_count: int = MAC_HIGHLIGHT_COUNT,
+    show: bool = False,
+    debug: bool = False,
+) -> plt.Figure:
+    """
+    Stylized marginal abatement cost curve: stacked rectangles ordered by
+    levelized cost (low → high). Gray base = cost covered by carbon price;
+    magma upper section = uncovered abatement cost. The cheapest ``highlight_count``
+    options use a dashed hatch on their red sections only.
+    """
+    if costs is None:
+        costs = list(MAC_DEFAULT_COSTS)
+    if widths is None:
+        widths = list(MAC_DEFAULT_WIDTHS)
+    if len(costs) != len(widths):
+        raise ValueError("costs and widths must have the same length")
+
+    order = np.argsort(costs)
+    costs = [float(costs[i]) for i in order]
+    widths = [float(widths[i]) for i in order]
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    x_left = 0.0
+    edge_kw = {"edgecolor": "black", "linewidth": 0.8}
+
+    for i, (cost, width) in enumerate(zip(costs, widths)):
+        covered_h = min(carbon_price, cost)
+        if covered_h > 0:
+            ax.add_patch(
+                Rectangle(
+                    (x_left, 0.0),
+                    width,
+                    covered_h,
+                    facecolor=MAC_COVERED_COLOR,
+                    **edge_kw,
+                )
+            )
+        if cost > carbon_price:
+            uncovered_kw = {
+                **edge_kw,
+                "facecolor": MAC_UNCOVERED_COLOR,
+            }
+            if i < highlight_count:
+                uncovered_kw["hatch"] = "----"
+            ax.add_patch(
+                Rectangle(
+                    (x_left, carbon_price),
+                    width,
+                    cost - carbon_price,
+                    **uncovered_kw,
+                )
+            )
+        x_left += width
+
+    total_width = sum(widths)
+    y_top = max(costs) * 1.08
+    ax.set_xlim(0.0, total_width * 1.05)
+    ax.set_ylim(0.0, y_top * 1.05)
+    ax.axhline(
+        carbon_price,
+        color="black",
+        linestyle="--",
+        linewidth=1.0,
+        alpha=0.55,
+        zorder=5,
+    )
+    ax.set_xlabel("Capacity [ktCO2eq p.a.]", fontsize=13)
+    ax.set_ylabel("Levelized CCS/methanol cost [€/t]", fontsize=13)
+    _style_conceptual_arrow_axes(ax, total_width, y_top, debug=debug)
+    ax.grid(axis="y", linestyle="--", alpha=0.35)
+
+    fig.tight_layout()
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    if debug:
+        print(
+            f"fig_mac_stylized: bars={list(zip(widths, costs))}, "
+            f"carbon_price={carbon_price}, highlighted={highlight_count}"
+        )
+        print(f"Saved {out_path}")
+    if show:
+        plt.show()
+    return fig
+
+
 def main(show: bool = False, debug: bool = False) -> list[str]:
     """Generate all EMA figures."""
     results_df = load_ema_results()
@@ -901,6 +1032,11 @@ def main(show: bool = False, debug: bool = False) -> list[str]:
         saved.append("results/fig4_plant_costs.png")
         if not show:
             plt.close(fig)
+
+    fig = fig_mac_stylized(show=show, debug=debug)
+    saved.append("results/mac_curve_stylized.png")
+    if not show:
+        plt.close(fig)
 
     return saved
 
