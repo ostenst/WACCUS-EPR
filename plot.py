@@ -986,7 +986,7 @@ def fig_mac_stylized(
         zorder=5,
     )
     ax.set_xlabel("Capacity [ktCO2eq p.a.]", fontsize=13)
-    ax.set_ylabel("Levelized CCS/methanol cost [€/t]", fontsize=13)
+    ax.set_ylabel("Levelized cost [€/tCO2eq]", fontsize=13)
     _style_conceptual_arrow_axes(ax, total_width, y_top, debug=debug)
     ax.grid(axis="y", linestyle="--", alpha=0.35)
 
