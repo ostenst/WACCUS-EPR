@@ -3,7 +3,13 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import matplotlib.patheffects as path_effects
 import matplotlib.cm as cm
-import numpy as np
+from matplotlib.lines import Line2D
+
+MAIN_PLANT_LEGEND_LABELS = {
+    "CCS": "CHP with CCS [ktCO2 p.a.]",
+    "CCU": "CHP with CCU [ktCO2eq p.a.]",
+    "gasification": "Replaced CHP [ktCO2eq p.a.]",
+}
 
 
 def _normalize_plant_name(name) -> str:
@@ -56,6 +62,55 @@ def _load_other_plants(main_names, debug: bool = False) -> pd.DataFrame:
     return merged
 
 
+def _bubble_legend_handle(
+    color,
+    edgecolor: str = "black",
+    alpha: float = 0.8,
+    markersize: float = 10,
+):
+    return Line2D(
+        [0],
+        [0],
+        marker="o",
+        linestyle="None",
+        markerfacecolor=color,
+        markeredgecolor=edgecolor,
+        markeredgewidth=1,
+        markersize=markersize,
+        alpha=alpha,
+    )
+
+
+def _map_bubble_legend(
+    mode: str,
+    plant_color,
+    ccu_color,
+    has_other_plants: bool,
+    debug: bool = False,
+) -> tuple[list[Line2D], list[str]]:
+    """Legend handles for map bubble types (lower-left placement in plot_europe)."""
+    handles: list[Line2D] = []
+    labels: list[str] = []
+
+    if has_other_plants:
+        handles.append(_bubble_legend_handle("0.55", edgecolor="0.25", alpha=0.75))
+        labels.append("Other CHP plants [ktCO2 p.a.]")
+
+    handles.append(_bubble_legend_handle("black", alpha=0.90))
+    labels.append("Plastic supply [ktCO2eq p.a.]")
+
+    handles.append(_bubble_legend_handle(plant_color, alpha=0.8))
+    labels.append(MAIN_PLANT_LEGEND_LABELS[mode])
+
+    if mode == "gasification":
+        handles.append(_bubble_legend_handle(ccu_color, alpha=0.8))
+        labels.append("Methanol via gasification [ktCO2eq p.a.]")
+
+    if debug:
+        print(f"_map_bubble_legend: mode={mode}, labels={labels}")
+    return handles, labels
+
+
 def plot_europe(mode="CCS", debug=False):
     """Plot a part of Europe using the shapefile data."""
     if debug:
@@ -102,7 +157,8 @@ def plot_europe(mode="CCS", debug=False):
     fig, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
     europe.plot(ax=ax, edgecolor="black", facecolor="whitesmoke")
 
-    plant_color = {"CCS": magma(0.60), "CCU": magma(0.20), "gasification": magma(0.9)}[mode]
+    ccu_color = magma(0.20)
+    plant_color = {"CCS": magma(0.60), "CCU": ccu_color, "gasification": magma(0.9)}[mode]
 
     if mode == "CCS":
         for name, lon, lat in destinations:
@@ -119,45 +175,34 @@ def plot_europe(mode="CCS", debug=False):
 
     scaling = 1.2
     x_min, x_max = 2, 24
-    y_min, y_max = 53.5, 70
+    y_min, y_max = 52.5, 69.5
 
     ax.set_xlim(x_min, x_max)
     ax.set_ylim(y_min, y_max)
     ax.set_aspect(1.90)
 
-    # Compute pie_size (axes fraction) to match the CCS scatter bubble diameter
     s_val = granulates_diameter / 1000 * scaling
-    fig.canvas.draw()
-    bbox = ax.get_window_extent(fig.canvas.get_renderer())
-    marker_diameter_px = 2 * np.sqrt(s_val / np.pi) * fig.dpi / 72
-    pie_size = marker_diameter_px / min(bbox.width, bbox.height)
-    if debug:
-        print(f"Computed pie_size: {pie_size:.3f}")
-
-    if mode == "CCS":
-        ax.scatter(granulates_coordinates[1], granulates_coordinates[0],
-                   s=s_val, color='grey', alpha=0.8,
-                   edgecolor='black', linewidth=1, zorder=4)
-    elif mode == "CCU":
-        cx, cy = granulates_coordinates[1], granulates_coordinates[0]
-        x_frac = (cx - x_min) / (x_max - x_min)
-        y_frac = (cy - y_min) / (y_max - y_min)
-        pie_ax = ax.inset_axes([x_frac - pie_size / 2, y_frac - pie_size / 2,
-                                pie_size, pie_size])
-        pie_ax.pie([1, 2], colors=[magma(0.20), 'grey'],
-                   wedgeprops={'edgecolor': 'black', 'linewidth': 1, 'alpha': 0.8})
-        pie_ax.patch.set_alpha(0)
-    elif mode == "gasification":
-        ax.scatter(15.088126, 58.528987, s=s_val,
-                   color=magma(0.20), alpha=0.8, edgecolor='black', linewidth=1, zorder=4)
-        cx, cy = granulates_coordinates[1], granulates_coordinates[0]
-        x_frac = (cx - x_min) / (x_max - x_min)
-        y_frac = (cy - y_min) / (y_max - y_min)
-        pie_ax = ax.inset_axes([x_frac - pie_size / 2, y_frac - pie_size / 2,
-                                pie_size, pie_size])
-        pie_ax.pie([1, 2], colors=[magma(0.20), 'grey'],
-                   wedgeprops={'edgecolor': 'black', 'linewidth': 1, 'alpha': 0.8})
-        pie_ax.patch.set_alpha(0)
+    ax.scatter(
+        granulates_coordinates[1],
+        granulates_coordinates[0],
+        s=s_val,
+        color="black",
+        alpha=0.90,
+        edgecolor="black",
+        linewidth=1,
+        zorder=4,
+    )
+    if mode == "gasification":
+        ax.scatter(
+            15.088126,
+            58.528987,
+            s=s_val,
+            color=ccu_color,
+            alpha=0.8,
+            edgecolor="black",
+            linewidth=1,
+            zorder=4,
+        )
 
     lons = []
     lats = []
@@ -172,7 +217,8 @@ def plot_europe(mode="CCS", debug=False):
                edgecolor='black', linewidth=1, zorder=5)
 
     other_plants = _load_other_plants(plants_df["Name"], debug=debug)
-    if not other_plants.empty:
+    has_other_plants = not other_plants.empty
+    if has_other_plants:
         other_sizes = other_plants["total_ktco2"] * scaling
         ax.scatter(
             other_plants["Longitude"],
@@ -185,6 +231,22 @@ def plot_europe(mode="CCS", debug=False):
             zorder=4,
         )
 
+    legend_handles, legend_labels = _map_bubble_legend(
+        mode,
+        plant_color,
+        ccu_color,
+        has_other_plants=has_other_plants,
+        debug=debug,
+    )
+    ax.legend(
+        legend_handles,
+        legend_labels,
+        loc="lower left",
+        fontsize=10,
+        framealpha=0.92,
+        edgecolor="0.35",
+    )
+
     ax.set_xticks([])
     ax.set_yticks([])
     ax.set_xlabel("")
@@ -196,4 +258,4 @@ def plot_europe(mode="CCS", debug=False):
 
 
 if __name__ == "__main__":
-    plot_europe(mode="CCU")
+    plot_europe(mode="CCS")
