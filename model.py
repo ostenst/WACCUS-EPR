@@ -308,14 +308,14 @@ def plan_CCS(plant, c, x, l):
     if _mode(plant.get('Truck_distance')):
         CAPEX_loading_kEUR, loading_cost = _loading_capex_and_lev()
         distance = float(plant['Truck_distance']) # [km]
-        a1, a2 = 0.15, 5.58 
-        UC = a1 + a2 / distance # [€/(t*km)]
+        a2 = 5.58
+        UC = x["cost_correlation_truck"] + a2 / distance # [€/(t*km)]
         truck_cost = UC * distance # [€/tCO2]
 
     if _mode(plant.get('Pipeline_distance')):
         distance = float(plant['Pipeline_distance'])/1000 # [km]
-        a1, a2, a3, a4 = 0.02, 260, 0.07, -0.61
-        UC = a1 + a2 * (distance / 1)**a3 * (annual_CO2*1000/ 1)**a4 # [€/(t*km)]
+        a2, a3, a4 = 260, 0.07, -0.61
+        UC = x["cost_correlation_pipeline"] + a2 * (distance / 1)**a3 * (annual_CO2*1000/ 1)**a4 # [€/(t*km)]
         pipeline_cost = UC * distance # [€/tCO2]
 
     if _mode(plant.get('Rail_distance')):
@@ -876,7 +876,7 @@ def plan_gasifier(
 def plan_replacements(plants_slice: pd.DataFrame, c: dict, x: dict, debug: bool = False) -> Dict[str, Any]:
     """Sum per-plant truck haul and heat-pump replacement costs over ``plants_slice``."""
     cepci_hp_adj = cepci_adjustment(c, c["CEPCI_HP_reference"])  # [-]
-    a1_truck, a2_truck = 0.15, 5.58  # [EUR/(t·km), EUR/t] same as plan_CCS CO₂ truck (Ouvrey et al., 2024)
+    a2_truck = 5.58  # [EUR/t] same as plan_CCS CO₂ truck (Ouvrey et al., 2024)
 
     opex_truck_eur_yr = 0.0
     capex_hp_meur = 0.0
@@ -893,7 +893,7 @@ def plan_replacements(plants_slice: pd.DataFrame, c: dict, x: dict, debug: bool 
         distance_km = float(plant_row["gasification_distance_km"])  # [km]
         flh_plant = float(plant_row["FLH"])  # [h/yr]
 
-        uc_truck = a1_truck + a2_truck / distance_km  # [EUR/(t·km)]
+        uc_truck = x["cost_correlation_truck"] + a2_truck / distance_km  # [EUR/(t·km)]
         truck_eur_per_t = uc_truck * distance_km * x["transport_cost_factor"]  # [EUR/t waste]
         plant_opex_truck = waste_mass_t_per_yr * truck_eur_per_t  # [EUR/yr]
 
@@ -1735,7 +1735,7 @@ def WACCUS_EPR(
     q_hex = 0.64,           # [MWth/MWreb] [Beiron, 2022] heat recovery from capture reboiler
     p_capture = 0.1,        # [MWh/tCO2] [Beiron, 2022]
     p_condition = 0.37,     # [MJ/kgCO2] [Kumar, 2023]
-    COP = 3,                # [MWth/MWel]
+    COP = 2.5,                # [MWth/MWel]
     eta_electrolyzer = 0.699, # [MWH2/MWel] Table2.1 MSc Jacobsson & Palmgren (2025)
     heat_optimism = 0.15,    # [-] [0-1.0] [0-100%] optimistic assumption on heat recovery from electrolyzers
     opex_var_sorting_sek_per_t_waste = 200.0,  # [SEK/t waste] Brista basis
@@ -1757,6 +1757,8 @@ def WACCUS_EPR(
     storage = "oygarden",   # ["oygarden", "kalundborg"]
     storage_cost = 20, # [EUR/tCO2] https://www.globalccsinstitute.com/wp-content/uploads/2025/12/Cost-of-CO2-Storage-1225.pdf
     transport_cost_factor = 1.0,  # [-] scales CCS/replacement transport stack
+    cost_correlation_truck = 0.15,  # [EUR/(t·km)] Ouvrey truck correlation term
+    cost_correlation_pipeline = 0.02,  # [EUR/(t·km)] Ouvrey pipeline correlation term
 
     CRC = 100,              # [EUR/tCO2]
     ETS = 80,               # [EUR/tCO2] Use this report: The EU-ETS Price Through 2030 and Beyond: A closer look at drivers, models and assumptions (https://www.ecologic.eu/19034)
@@ -1873,6 +1875,8 @@ def WACCUS_EPR(
         "storage": storage,
         "storage_cost": storage_cost,
         "transport_cost_factor": transport_cost_factor,
+        "cost_correlation_truck": cost_correlation_truck,
+        "cost_correlation_pipeline": cost_correlation_pipeline,
 
         "CRC": CRC,
         "ETS": ETS,

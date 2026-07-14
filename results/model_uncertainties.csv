@@ -30,6 +30,8 @@ shipping_case,CO2 shipping cost scenario,Categorical,optimist_0.5Mt; pessimist_0
 storage,CO2 storage site,Categorical,oygarden; kalundborg,-,
 storage_cost,CO2 storage cost,Real,5 - 58,EUR/tCO2,
 transport_cost_factor,Transport cost multiplier (CCS and replacement haul),Real,0.8 - 1.2,-,
+cost_correlation_truck,Truck transport cost correlation term,Real,0.1 - 0.2,EUR/(t·km),
+cost_correlation_pipeline,Pipeline transport cost correlation term,Real,0.01 - 0.03,EUR/(t·km),
 k,CAPEX scaling exponent,Real,0.62 - 0.72,-,
 dr,Discount rate,Real,0.06 - 0.09,-,
 t,Project lifetime,Real,20 - 30,yr,

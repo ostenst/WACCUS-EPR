@@ -80,6 +80,8 @@ UNCERTAINTY_ROWS: list[dict[str, str]] = [
     {"parameter": "storage", "name": "CO2 storage site", "type": "Categorical", "uncertainty_range": "oygarden; kalundborg", "units": "-", "notes": ""},
     {"parameter": "storage_cost", "name": "CO2 storage cost", "type": "Real", "uncertainty_range": "5 - 58", "units": "EUR/tCO2", "notes": ""},
     {"parameter": "transport_cost_factor", "name": "Transport cost multiplier (CCS and replacement haul)", "type": "Real", "uncertainty_range": "0.8 - 1.2", "units": "-", "notes": ""},
+    {"parameter": "cost_correlation_truck", "name": "Truck transport cost correlation term", "type": "Real", "uncertainty_range": "0.1 - 0.2", "units": "EUR/(t·km)", "notes": ""},
+    {"parameter": "cost_correlation_pipeline", "name": "Pipeline transport cost correlation term", "type": "Real", "uncertainty_range": "0.01 - 0.03", "units": "EUR/(t·km)", "notes": ""},
     {"parameter": "k", "name": "CAPEX scaling exponent", "type": "Real", "uncertainty_range": "0.62 - 0.72", "units": "-", "notes": ""},
     {"parameter": "dr", "name": "Discount rate", "type": "Real", "uncertainty_range": "0.06 - 0.09", "units": "-", "notes": ""},
     {"parameter": "t", "name": "Project lifetime", "type": "Real", "uncertainty_range": "20 - 30", "units": "yr", "notes": ""},

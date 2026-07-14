@@ -185,12 +185,12 @@ model.uncertainties = [
     RealParameter("stringent_products", 0.00, 1.00),
     RealParameter("price_products", 36_000, 56_000),
 
-    RealParameter("COP", 2.5, 3.5),
-    RealParameter("eta_electrolyzer", 0.675, 0.725),
+    RealParameter("COP", 2.0, 3.0),
+    RealParameter("eta_electrolyzer", 0.63, 0.71),
     RealParameter("q_reb", 2.7, 3.7),
-    RealParameter("q_hex", 0.62, 0.66),  # [MWth/MWreb]
+    RealParameter("q_hex", 0.60, 0.68),  # [MWth/MWreb]
     RealParameter("p_capture", 0.08, 0.12),
-    RealParameter("p_condition", 0.30, 0.45),
+    RealParameter("p_condition", 0.35, 0.45),
     RealParameter("heat_optimism", 0.00, 1.00), # [0-100%] recovery from electrolyzers
 
     RealParameter("gasified_carbon_fraction", 0.65, 0.75), # [-] 0.70 central value, fraction of C to gasifier branch [Ecoplanta]
@@ -202,7 +202,7 @@ model.uncertainties = [
     RealParameter("pmethanol", 550, 850),
     RealParameter("CRC", 50, 250),
     RealParameter("ETS", 50, 250),
-    RealParameter("camine", 40, 50),
+    RealParameter("camine", 35, 55), # Ramboll SEK/tCO2
     CategoricalParameter(
         "shipping_case",
         ["optimist_0.5Mt", "pessimist_0.5Mt", "optimist_1Mt", "pessimist_1Mt"],
@@ -210,6 +210,8 @@ model.uncertainties = [
     CategoricalParameter("storage", ["oygarden", "kalundborg"]),
     RealParameter("storage_cost", 5, 58), # GlobalCCSInstitute report 
     RealParameter("transport_cost_factor", 0.80, 1.20),  # [-] CCS + replacement haul transport
+    RealParameter("cost_correlation_truck", 0.10, 0.20),  # [EUR/(t·km)] truck transport correlation (Ouvrey)
+    RealParameter("cost_correlation_pipeline", 0.01, 0.03),  # [EUR/(t·km)] pipeline transport correlation (Ouvrey)
 
     RealParameter("k", 0.62, 0.72),
     RealParameter("dr", 0.06, 0.09),
