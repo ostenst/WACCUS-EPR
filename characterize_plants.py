@@ -140,4 +140,38 @@ print(f"\nTotal waste (incl. moisture and ash): {WASTE_SUM/1e6} kt/yr")
 print(f"Total plastic: {PLASTIC_SUM/1e6} kt/yr")
 print(f"Total biomass: {BIOMASS_SUM/1e6} kt/yr")
 
+CARBON_KMOL_TO_TC = 12.0 / 1000.0  # [t C/yr per kmol C/yr]
+plant_ranking = (
+    plants_clean.sort_values("Qlhv", ascending=False)
+    .reset_index(drop=True)
+    .assign(
+        ID=lambda df: range(1, len(df) + 1),
+        nC_pl_tC_pa=lambda df: df["nC_pl"] * CARBON_KMOL_TO_TC,
+        nC_bio_tC_pa=lambda df: df["nC_bio"] * CARBON_KMOL_TO_TC,
+        Eb_Ep_tCO2_pa=lambda df: df["Biogenic"] * 1000 + df["Fossil"] * 1000,
+    )
+)
+ranking_table = plant_ranking[
+    ["ID", "Qlhv", "nC_pl_tC_pa", "nC_bio_tC_pa", "Eb_Ep_tCO2_pa", "FLH"]
+].rename(
+    columns={
+        "Qlhv": "Qlhv [MW]",
+        "nC_pl_tC_pa": "nC_pl [tC p.a.]",
+        "nC_bio_tC_pa": "nC_bio [tC p.a.]",
+        "Eb_Ep_tCO2_pa": "Eb+Ep [tCO2 p.a.]",
+        "FLH": "FLH [h/yr]",
+    }
+)
+ranking_table = ranking_table.round(
+    {
+        "Qlhv [MW]": 1,
+        "nC_pl [tC p.a.]": 0,
+        "nC_bio [tC p.a.]": 0,
+        "Eb+Ep [tCO2 p.a.]": 0,
+        "FLH [h/yr]": 0,
+    }
+)
+print("\nPlant ranking by Qlhv (largest to smallest):")
+print(ranking_table.to_string(index=False))
+
 plants_clean.to_csv("data/plants_clean.csv", index=False)
