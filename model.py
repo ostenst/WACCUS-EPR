@@ -244,9 +244,27 @@ def plan_CCS(plant, c, x, l):
 
     mCO2_captured = mCO2 * c["capture_rate"] # [kgCO2/s]
     annual_CO2 = annual_CO2 * c["capture_rate"] # [ktCO2/yr]
+    nCO2 = mCO2_captured / 44.0  # [kmol/s]
     Qreb = mCO2_captured * x["q_reb"]                       # [MW]
     Pcapture = x["p_capture"] * mCO2_captured/1000*3600     # [MW] 
-    Pcondition = x["p_condition"] * mCO2_captured           # [MW]  
+    # Pcondition = x["p_condition"] * mCO2_captured           # [MW]
+
+    Wcomp_CO2, Qcool_CO2, _, _ = compression_energy(
+        nCO2,
+        T1=40 + 273.15,
+        P1=1.0,
+        thermo_props=c["thermo_props"],
+        gas="CO2",
+        n_stages=3,
+        pr=2.5,
+        Tdiff=-50,
+        n_is=c["eta_is"],
+    )
+    if any(q < 0 for q in Qcool_CO2):
+        raise ValueError("Negative value found in Qcool_CO2 array")
+    Qcool_CO2 = float(sum(Qcool_CO2))
+    Wcool_CO2 = Qcool_CO2 / x["COP"] # simplified cooling power requirement - neglecting the final cooling to -30C
+    Pcondition = float(sum(Wcomp_CO2)) + Wcool_CO2 # [MWel]
 
     # Penalize CHP power; heat: steam DH reduced by reboiler, Qfgc unchanged
     Qsteam = plant["Qwaste"]
@@ -259,7 +277,7 @@ def plan_CCS(plant, c, x, l):
 
     Q_delivered = Qdh_steam_old * (1 - Qreb / Qsteam) + plant["Qfgc"]  # [MWth] Qfgc unaffected by reboiler
     Qrec_hex = x["q_hex"] * Qreb  # [MWth]
-    Qavailable = Qrec_hex  # [MWth] capture heat recovery
+    Qavailable = Qrec_hex  + Qcool_CO2 # [MWth] capture heat recovery + cooling
     Qdiff = Q_heat_target - (Q_delivered + Qavailable)  # [MWth]
     Whp = 0
     if Qdiff < 0:
@@ -279,11 +297,13 @@ def plan_CCS(plant, c, x, l):
         c["capex_ref_capture_keur"] * (annual_CO2 / c["capacity_ref_capture_kt_per_yr"]) ** x["k"] * CEPCI_capture_adjustment
     )  # [kEUR]
     CAPEX_capture_lev = levelize_kEUR(CAPEX_capture, annual_CO2, x) # [EUR/tCO2]
+    CAPEX_comp_CO2 = compression_capex_eur(Wcomp_CO2, c["compression_costs"]) / 1000 * CEPCI_adjustment  # [kEUR]
+    CAPEX_comp_CO2_lev = levelize_kEUR(CAPEX_comp_CO2, annual_CO2, x) # [EUR/tCO2]
     CEPCI_HP_adjustment = cepci_adjustment(c, c["CEPCI_HP_reference"])
     CAPEX_HP = x["capex_ref_hp_keur_per_mwth"] * Whp * x["COP"] * CEPCI_HP_adjustment  # [kEUR] 0.86 MEUR/MWth ref, CEPCI 2022→scenario
     CAPEX_HP_lev = levelize_kEUR(CAPEX_HP, annual_CO2, x)
 
-    OPEX_fix = (CAPEX_capture + CAPEX_HP) * x["opex_fix"] / annual_CO2  # [EUR/tCO2]
+    OPEX_fix = (CAPEX_capture + CAPEX_HP + CAPEX_comp_CO2) * x["opex_fix"] / annual_CO2  # [EUR/tCO2]
     OPEX_makeup = x["camine"] * c['SEK_to_EUR']                                      # [EUR/tCO2]
     OPEX_energy = (Ppenalty*x["celc"] + Qpenalty*x["celc"]*x["cheat"]) / (annual_CO2 * 1000)  # [EUR/tCO2]
     OPEX = OPEX_fix + OPEX_makeup + OPEX_energy   
@@ -349,7 +369,7 @@ def plan_CCS(plant, c, x, l):
     rail_cost *= transport_factor
     shipping_cost *= transport_factor
     transport_cost = loading_cost + truck_cost + pipeline_cost + rail_cost + shipping_cost  # [EUR/tCO2]
-    cost_CCS = CAPEX_capture_lev + CAPEX_HP_lev + OPEX + transport_cost + x["storage_cost"]  # [EUR/tCO2]
+    cost_CCS = CAPEX_capture_lev + CAPEX_HP_lev + CAPEX_comp_CO2_lev + OPEX + transport_cost + x["storage_cost"]  # [EUR/tCO2]
 
     fossil = plant["Fossil"] / plant["Total"]                       # [tfossil/t] 
     biogenic = 1 - fossil                                           # [tbiogenic/t] 
@@ -366,6 +386,7 @@ def plan_CCS(plant, c, x, l):
         "cost_CCS": cost_CCS,
         "CAPEX_capture_lev": CAPEX_capture_lev,
         "CAPEX_HP_lev": CAPEX_HP_lev,
+        "CAPEX_comp_CO2_lev": CAPEX_comp_CO2_lev,
         "OPEX_fix": OPEX_fix,
         "OPEX_makeup": OPEX_makeup,
         "OPEX_energy": OPEX_energy,
@@ -379,6 +400,7 @@ def plan_CCS(plant, c, x, l):
         "capex_overnight_kEUR": {
             "capture": CAPEX_capture,
             "hp": CAPEX_HP,
+            "comp_co2": CAPEX_comp_CO2,
             "loading": CAPEX_loading_kEUR,
             "train": CAPEX_train_kEUR,
         },
@@ -1299,6 +1321,7 @@ def plot_mitigation_cost_breakdown(
     capex_items = [
         ("Capture", "capture"),
         ("Heat pump", "hp"),
+        ("Comp. CO₂", "comp_co2"),
         ("Loading", "loading"),
         ("Rail", "train"),
     ]
@@ -1329,6 +1352,7 @@ def plot_mitigation_cost_breakdown(
     lev_map = [
         ("Capture\nCAPEX", "CAPEX_capture_lev"),
         ("HP\nCAPEX", "CAPEX_HP_lev"),
+        ("Comp. CO₂\nCAPEX", "CAPEX_comp_CO2_lev"),
         ("Fixed\nOPEX", "OPEX_fix"),
         ("Makeup\nOPEX", "OPEX_makeup"),
         ("Energy\nOPEX", "OPEX_energy"),
@@ -1702,7 +1726,7 @@ def build_plant_map_outcomes(
 
 def WACCUS_EPR(
     # [C] Constants
-    EPR_design="Recovery", # [Mitigation, Recovery, Replacement]
+    EPR_design="Mitigation", # [Mitigation, Recovery, Replacement]
     plants_df=None, 
     shipping_costs=None,
     compression_costs=None,
@@ -1734,7 +1758,7 @@ def WACCUS_EPR(
     q_reb = 3.5,            # [MJ/kgCO2] [2.5-3.5] [Soroodan, 2026]
     q_hex = 0.64,           # [MWth/MWreb] [Beiron, 2022] heat recovery from capture reboiler
     p_capture = 0.1,        # [MWh/tCO2] [Beiron, 2022]
-    p_condition = 0.37,     # [MJ/kgCO2] [Kumar, 2023]
+    # p_condition = 0.37,     # [MJ/kgCO2] [Kumar, 2023]
     COP = 2.5,                # [MWth/MWel]
     eta_electrolyzer = 0.699, # [MWH2/MWel] Table2.1 MSc Jacobsson & Palmgren (2025)
     heat_optimism = 0.15,    # [-] [0-1.0] [0-100%] optimistic assumption on heat recovery from electrolyzers
@@ -1850,7 +1874,7 @@ def WACCUS_EPR(
         "q_hex": q_hex,
         # "q_electrolyzer": q_electrolyzer,
         "p_capture": p_capture,
-        "p_condition": p_condition,
+        # "p_condition": p_condition,
         "COP": COP,
         "eta_electrolyzer": eta_electrolyzer,
         "heat_optimism": heat_optimism,

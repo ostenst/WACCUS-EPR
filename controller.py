@@ -190,7 +190,7 @@ model.uncertainties = [
     RealParameter("q_reb", 2.7, 3.7),
     RealParameter("q_hex", 0.60, 0.68),  # [MWth/MWreb]
     RealParameter("p_capture", 0.08, 0.12),
-    RealParameter("p_condition", 0.35, 0.45),
+    # RealParameter("p_condition", 0.35, 0.45), # not used, if we use own conditioning calculation for the CCS case!
     RealParameter("heat_optimism", 0.00, 1.00), # [0-100%] recovery from electrolyzers
 
     RealParameter("gasified_carbon_fraction", 0.65, 0.75), # [-] 0.70 central value, fraction of C to gasifier branch [Ecoplanta]
