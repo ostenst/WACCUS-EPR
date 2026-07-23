@@ -1769,7 +1769,7 @@ def WACCUS_EPR(
     dr = 0.075,                         # [-]
     t = 25,                             # [yr]
     opex_fix = 0.05,                     # [-] fixed OPEX as fraction of overnight CAPEX
-    capex_ref_train_eur = 8610000,  # [EUR] fixed train @ 15 wagons × 60 t/wagon [Gunnarsson, 2025]
+    capex_ref_train_eur = 8610000,  # [EUR] fixed train @ 15 wagons × 60 t/wagon [Gunnarsson, 2024]
     capex_ref_synthesis_meur = 1.8749,  # [MEUR] synthesis CAPEX ∝ (m_methanol [t/d])^-0.315 [Danish Renewable Fuels]
 
     camine = 44,            # [SEK/tCO2] [Ramboll-Malmö, 2023]
@@ -2205,6 +2205,8 @@ if __name__ == "__main__":
     # Adjust dataframes: add 0.5Mt shipping costs, convert SEK to EUR
     SEK_to_EUR = 0.091
     shipping_costs = shipping_adjustment(shipping_costs, scaling=0.67, debug=False)
+    shipping_costs.to_csv('data/shipping_costs.csv', index=False) # Overwrite old shipping costs
+
     cost_columns = [col for col in shipping_costs.columns if col != 'distance']
     shipping_costs[cost_columns] = shipping_costs[cost_columns] * SEK_to_EUR
     # Run the model
