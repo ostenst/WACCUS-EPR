@@ -151,7 +151,7 @@ model.constants = [
 
     # Reference CAPEX + capacity — scales as (capacity / capacity_ref)^k
     Constant("capex_ref_capture_keur", 3.7e9 * 0.091 / 1000),  # [kEUR]
-    Constant("capacity_ref_capture_kt_per_yr", 400.0),  # [ktCO2/yr]
+    Constant("capacity_ref_capture_kt_per_yr", 450.0),  # [ktCO2/yr]
     Constant("capex_ref_loading_sek", 63000000),  # [SEK]
     Constant("capacity_ref_loading_kt_per_yr", 150.0),  # [ktCO2/yr]
     Constant("capex_ref_sorting_msek", 650.0),  # [MSEK]
@@ -175,11 +175,11 @@ model.constants = [
 model.uncertainties = [
     CategoricalParameter("EPR_products", [True, False]),
     CategoricalParameter("EPR_fee", [100, 200, 300, 400, 500]),
-    RealParameter("baseline_granulates", 1_200_000, 1_300_000),
+    RealParameter("baseline_granulates", 1_000_000, 1_300_000),
     RealParameter("inc_granulates", 0.00, 0.30),
     RealParameter("shift_granulates", 0.00, 0.40),
     RealParameter("price_granulates", 11_000, 15_000),
-    RealParameter("baseline_products", 700_000, 884_393),
+    RealParameter("baseline_products", 300_000, 900_000),
     RealParameter("inc_products", 0.00, 0.30),
     RealParameter("shift_products", 0.00, 0.40),
     RealParameter("stringent_products", 0.00, 1.00),

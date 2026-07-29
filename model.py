@@ -1817,7 +1817,7 @@ def WACCUS_EPR(
 
     # Reference CAPEX + capacity — overnight cost scales as (capacity / capacity_ref)^k
     capex_ref_capture_keur = 3.7e9 * 0.091 / 1000,  # [kEUR] capture @ capacity_ref_capture_kt_per_yr
-    capacity_ref_capture_kt_per_yr = 400.0,  # [ktCO2/yr] Sysav 2026 reference
+    capacity_ref_capture_kt_per_yr = 450.0,  # [ktCO2/yr] Sysav 2026 reference
     capex_ref_loading_sek = 63000000,  # [SEK] loading hub @ capacity_ref_loading_kt_per_yr [Koldioxid på tåg, 2024]
     capacity_ref_loading_kt_per_yr = 150.0,  # [ktCO2/yr]
     capex_ref_sorting_msek = 650.0,  # [MSEK] sorting @ capacity_ref_sorting_t_waste_per_yr [Tekniska Verken]
