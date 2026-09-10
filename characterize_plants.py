@@ -1,5 +1,8 @@
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+
+PLASTIC_REDUCTION = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
 
 plants_df = pd.read_csv("data/plants.csv")
 plant_distances = pd.read_csv('data/plant_distances.csv') # NOTE: Should add inland distances to SiteZero
@@ -9,6 +12,7 @@ WASTE_SUM = 0
 PLASTIC_SUM = 0
 BIOMASS_SUM = 0
 rows = []
+lhv_trajectories = []
 for _, plant in plants_df.iterrows():
     
     # Known data per plant
@@ -40,9 +44,31 @@ for _, plant in plants_df.iterrows():
     LHV_pl = 38.2*(nC_pl*12/m_pl) + 84.9*(nH_pl*1/m_pl - (nO_pl*16/m_pl)/8) - 0.62 # [MJ/kg d.a.]
     LHV_bio = 38.2*(nC_bio*12/m_bio) + 84.9*(nH_bio*1/m_bio - (nO_bio*16/m_bio)/8) - 0.62 # [MJ/kg d.a.]
 
-    # Based on the dry waste (of plastic and biomass) we can calculate the additional water and ash using Hammar's (2022) values
     x_ash_dry = 0.206 # [kg_ash/kg_dry] calc. based on the DRY waste, Hammar
     x_h2o_frac = 0.360 # [kg_moisture/kg_total] calc. based on wet waste, Hammar
+    rw = 2.5 # [MJ/kg] water evaporation
+
+    lhv_da_traj, lhv_dry_traj, lhv_tot_traj = [], [], []
+    for percent_reduction in PLASTIC_REDUCTION:
+        m_pl_reduced = m_pl * (1 - percent_reduction)
+        m_ash_red = -x_ash_dry * (m_bio + m_pl_reduced) / (x_ash_dry - 1)  # [kg_ash/yr]
+        m_dry_red = m_bio + m_pl_reduced + m_ash_red  # [kg_dry/yr]
+        m_h2o_red = -x_h2o_frac * m_dry_red / (x_h2o_frac - 1)  # [kg_h2o/yr]
+        m_tot_red = m_dry_red + m_h2o_red  # [kg/yr]
+        e_da = LHV_pl * m_pl_reduced + LHV_bio * m_bio  # [MJ/yr]
+        lhv_da_traj.append(e_da / (m_pl_reduced + m_bio))
+        lhv_dry_traj.append(e_da / m_dry_red)
+        lhv_tot_traj.append((e_da - rw * m_h2o_red) / m_tot_red)
+    lhv_trajectories.append(
+        {
+            "name": plant["Name"],
+            "lhv_da": lhv_da_traj,
+            "lhv_dry": lhv_dry_traj,
+            "lhv_tot": lhv_tot_traj,
+        }
+    )
+
+    # Based on the dry waste (of plastic and biomass) we can calculate the additional water and ash using Hammar's (2022) values
     m_ash = -x_ash_dry*(m_bio+m_pl) / (x_ash_dry - 1) # [kg_ash/yr] formula from Wolfram Alpha
     m_dry = m_bio + m_pl + m_ash
     m_h2o = -x_h2o_frac*m_dry / (x_h2o_frac - 1)
@@ -54,13 +80,13 @@ for _, plant in plants_df.iterrows():
     x_h2o = m_h2o / m_tot # [kg_water/kg_total]
 
     # From energy balance we can calculate the FLH and the total LHV of the fuel:
-    rw = 2.5 # [MJ/kg] water evaporation
     eta_boiler = 0.85 # [MWsteam/MWfuel] Assumption from EteknikKompendie p.86, gives range: 0.80-0.92
      # Also check Danish Energy Agency p.96: Technology data - energy plants for electricity and district heating generation
     Qlhv = Qsteam / eta_boiler 
     FLH = (m_pl*LHV_pl + m_bio*LHV_bio - rw*m_h2o)/3600 / Qlhv # [h/yr]
     LHV_biowet = (LHV_bio*m_bio - rw*m_h2o) / (m_bio + m_h2o) # [MJ/kg ash-free]
     LHV_tot = (LHV_pl*m_pl + LHV_bio*m_bio - rw*m_h2o) / (m_tot)
+    LHV_da = (LHV_pl*m_pl + LHV_bio*m_bio) / (m_pl + m_bio)
 
     rows.append({
         "Name": plant["Name"], "FLH": FLH,
@@ -173,5 +199,26 @@ ranking_table = ranking_table.round(
 )
 print("\nPlant ranking by Qlhv (largest to smallest):")
 print(ranking_table.to_string(index=False))
+
+fig, axes = plt.subplots(1, 3, figsize=(15, 5.5), sharex=True)
+x_pct = [p * 100 for p in PLASTIC_REDUCTION]
+colors = plt.cm.magma(np.linspace(0.15, 0.85, len(lhv_trajectories)))
+panel_specs = [
+    ("lhv_da", "Dry ash-free [MJ/kg]"),
+    ("lhv_dry", "Dry incl. ash [MJ/kg]"),
+    ("lhv_tot", "Total incl. ash & moisture [MJ/kg]"),
+]
+for ax, (key, ylabel) in zip(axes, panel_specs):
+    for color, traj in zip(colors, lhv_trajectories):
+        ax.plot(x_pct, traj[key], color=color, linewidth=2, label=traj["name"])
+    ax.set_ylabel(ylabel, fontsize=12)
+    ax.tick_params(labelsize=11)
+    ax.grid(axis="y", linestyle="--", alpha=0.35)
+axes[-1].set_xlabel("Plastic reduction [%]", fontsize=13)
+axes[0].legend(fontsize=8, loc="best", framealpha=0.9)
+fig.suptitle("LHV improvement with plastic reduction", fontsize=14, y=1.02)
+fig.tight_layout()
+fig.savefig("results/lhv_improvement_by_plastic_reduction.png", dpi=150, bbox_inches="tight")
+plt.close(fig)
 
 plants_clean.to_csv("data/plants_clean.csv", index=False)

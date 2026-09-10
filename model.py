@@ -696,10 +696,17 @@ def plan_gasifier(
     n_c_gasifier_pl = fuel.n_c_pl - n_c_combustor_pl  # [kmolC/yr]
     n_h_gasifier_yr = h_ratio_pl * n_c_gasifier_pl + h_ratio_bio * n_c_gasifier_bio  # [kmolH/yr]
 
-    q_combustor_yr = (
-        (n_c_combustor_pl * 12.0 + h_ratio_pl * n_c_combustor_pl * 1.0 + o_ratio_pl * n_c_combustor_pl * 16.0) * fuel.lhv_pl
-        + (n_c_combustor_bio * 12.0 + h_ratio_bio * n_c_combustor_bio * 1.0 + o_ratio_bio * n_c_combustor_bio * 16.0) * fuel.lhv_bio
-    )  # [MJ/yr]
+    m_combustor_pl_da = (
+        n_c_combustor_pl * 12.0 + h_ratio_pl * n_c_combustor_pl * 1.0 + o_ratio_pl * n_c_combustor_pl * 16.0
+    )  # [kg_da/yr]
+    m_combustor_bio_da = (
+        n_c_combustor_bio * 12.0 + h_ratio_bio * n_c_combustor_bio * 1.0 + o_ratio_bio * n_c_combustor_bio * 16.0
+    )  # [kg_da/yr]
+    q_combustor_yr = m_combustor_pl_da * fuel.lhv_pl + m_combustor_bio_da * fuel.lhv_bio  # [MJ/yr]
+    m_combustor_da = m_combustor_pl_da + m_combustor_bio_da  # [kg_da/yr]
+    m_combustor_tot = m_combustor_da + fuel.m_ash + fuel.m_h2o  # [kg/yr] all ash and moisture to combustor
+    lhv_combustor_da = q_combustor_yr / m_combustor_da if m_combustor_da > 0 else 0.0  # [MJ/kg_da]
+    lhv_combustor_tot = q_combustor_yr / m_combustor_tot if m_combustor_tot > 0 else 0.0  # [MJ/kg_wet]
     q_gasifier_yr = (
         (n_c_gasifier_pl * 12.0 + h_ratio_pl * n_c_gasifier_pl * 1.0 + o_ratio_pl * n_c_gasifier_pl * 16.0) * fuel.lhv_pl
         + (n_c_gasifier_bio * 12.0 + h_ratio_bio * n_c_gasifier_bio * 1.0 + o_ratio_bio * n_c_gasifier_bio * 16.0) * fuel.lhv_bio
@@ -711,6 +718,8 @@ def plan_gasifier(
             q_gasifier_yr,
             q_combustor_yr / (q_combustor_yr + q_gasifier_yr),
             fuel.e_input_mj_yr / (q_combustor_yr + q_gasifier_yr),
+            f"lhv_combustor_da={lhv_combustor_da:.2f} MJ/kg_da",
+            f"lhv_combustor_tot={lhv_combustor_tot:.2f} MJ/kg_wet",
         )
 
     lhv_ch3oh = c["LHV_CH3OH"] * 32.0  # [MJ/kmol]
