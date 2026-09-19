@@ -16,9 +16,9 @@ HUB_LAT = 58.527430
 HUB_LON = 15.079128
 POLICIES = ["Mitigation", "Recovery", "Replacement"]
 MAP_EXTENT = {"x_min": 11.5, "x_max": 19.0, "y_min": 55, "y_max": 61.0}
-BUBBLE_SCALE = 1.2
+BUBBLE_SCALE = 0.8
 BUBBLE_SCALE_DIVISOR = 10.0
-HEAT_COLOR = cm.magma(0.65)
+HEAT_COLOR = cm.magma(0.625)
 POWER_COLOR = cm.magma(0.12)
 HUB_RECYCLE_COLOR = cm.magma(0.0)
 OTHER_PLANT_COLOR = "0.55"
@@ -28,7 +28,7 @@ OTHER_PLANT_EDGE = "0.25"
 PLOTTING_ORDER = {
     "Mitigation": ["plant_heat", "plant_power"],
     "Recovery": ["plant_power", "plant_heat"],
-    "Replacement": ["hub_power", "hub_recycle_power", "plant_heat", "plant_power"],
+    "Replacement": ["hub_power", "hub_recycle_power", "plant_power", "plant_heat"],
 }
 
 
@@ -246,7 +246,7 @@ def compute_harmonized_scales(
     hub_means: pd.DataFrame,
     debug: bool = False,
 ) -> dict:
-    """Shared bubble diameter scales for heat and power across all three policy maps."""
+    """Shared bubble area scales for heat and power across all three policy maps."""
     heat_vals = plant_means.loc[plant_means["heat_mwth"] > 0, "heat_mwth"]
     hub_heat = hub_means["heat_mwth"].dropna()
     hub_heat = hub_heat[hub_heat > 0]
@@ -262,9 +262,10 @@ def compute_harmonized_scales(
     power_max = float(all_power.max()) if len(all_power) else 1.0
 
     base = BUBBLE_SCALE / BUBBLE_SCALE_DIVISOR
+    # Marker area ∝ MW; scale reference so largest bubble matches prior diameter∝MW at fleet max.
     scales = {
-        "heat_scale": base,
-        "power_scale": base,
+        "heat_scale": (base ** 2) * heat_max,
+        "power_scale": (base ** 2) * power_max,
         "heat_max": heat_max,
         "power_max": power_max,
     }
@@ -279,8 +280,8 @@ def compute_harmonized_scales(
 
 
 def _scatter_area_from_mw(mw: float, bubble_scale: float) -> float:
-    """Matplotlib scatter area so marker diameter scales with MW."""
-    return float(max(mw, 0.0) * bubble_scale) ** 2
+    """Matplotlib scatter marker area [points²] proportional to MW."""
+    return float(max(mw, 0.0) * bubble_scale)
 
 
 def _marker_radii_data(ax, lon: float, lat: float, area_pts2: float) -> tuple[float, float]:
@@ -504,7 +505,7 @@ def plot_power_map(
             ax,
             {"lon": HUB_LON, "lat": HUB_LAT, "power_mw": hub_recycle_power},
             scales,
-            f"If excl. electrolyzer: {hub_recycle_power:.0f} MW",
+            f"If excl. electrolyzer: {hub_recycle_power:.0f} MWe",
             offset_factor=1.05,
             debug=debug,
         )
@@ -584,7 +585,11 @@ def plot_all_power_maps(
     show: bool = False,
     debug: bool = False,
 ) -> list[str]:
-    """Build Mitigation, Recovery, and Replacement heat/power maps."""
+    """Build Mitigation, Recovery, and Replacement heat/power maps.
+
+    One ``compute_harmonized_scales`` call from all policies' plant/hub means
+    ensures heat and power bubble areas are comparable across the three maps.
+    """
     plant_means, hub_means = load_plant_means(results_path, debug=debug)
     scales = compute_harmonized_scales(plant_means, hub_means, debug=debug)
     saved = []

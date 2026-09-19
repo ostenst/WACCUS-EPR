@@ -185,7 +185,7 @@ model.uncertainties = [
     RealParameter("stringent_products", 0.00, 1.00),
     RealParameter("price_products", 36_000, 56_000),
 
-    RealParameter("COP", 2.0, 3.0),
+    RealParameter("COP", 3.0, 5.0),
     RealParameter("eta_electrolyzer", 0.63, 0.71),
     RealParameter("q_reb", 2.7, 3.7),
     RealParameter("q_hex", 0.60, 0.68),  # [MWth/MWreb]
@@ -255,7 +255,7 @@ model.outcomes = [
 
 if __name__ == "__main__":
     ema_logging.log_to_stderr(ema_logging.INFO)
-    n_scenarios = 10000
+    n_scenarios = 100000
     n_policies = len(POLICY_ORDER)  # 3: Mitigation, Recovery, Replacement
 
     results = perform_experiments(

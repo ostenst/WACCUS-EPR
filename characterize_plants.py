@@ -3,6 +3,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 PLASTIC_REDUCTION = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+RED_CMAP = [
+    "#F6CDCD",
+    "#EE9699",
+    "#E75263",
+    "#B73A49",
+    "#812632",
+    "#4B131A",
+]
 
 plants_df = pd.read_csv("data/plants.csv")
 plant_distances = pd.read_csv('data/plant_distances.csv') # NOTE: Should add inland distances to SiteZero
@@ -200,23 +208,24 @@ ranking_table = ranking_table.round(
 print("\nPlant ranking by Qlhv (largest to smallest):")
 print(ranking_table.to_string(index=False))
 
-fig, axes = plt.subplots(1, 3, figsize=(15, 5.5), sharex=True)
+fig, ax = plt.subplots(figsize=(8, 4.5))
 x_pct = [p * 100 for p in PLASTIC_REDUCTION]
-colors = plt.cm.magma(np.linspace(0.15, 0.85, len(lhv_trajectories)))
-panel_specs = [
-    ("lhv_da", "Dry ash-free [MJ/kg]"),
-    ("lhv_dry", "Dry incl. ash [MJ/kg]"),
-    ("lhv_tot", "Total incl. ash & moisture [MJ/kg]"),
-]
-for ax, (key, ylabel) in zip(axes, panel_specs):
-    for color, traj in zip(colors, lhv_trajectories):
-        ax.plot(x_pct, traj[key], color=color, linewidth=2, label=traj["name"])
-    ax.set_ylabel(ylabel, fontsize=12)
-    ax.tick_params(labelsize=11)
-    ax.grid(axis="y", linestyle="--", alpha=0.35)
-axes[-1].set_xlabel("Plastic reduction [%]", fontsize=13)
-axes[0].legend(fontsize=8, loc="best", framealpha=0.9)
-fig.suptitle("LHV improvement with plastic reduction", fontsize=14, y=1.02)
+n_plants = len(lhv_trajectories)
+color_idx = np.linspace(0, len(RED_CMAP) - 1, n_plants)
+colors = [RED_CMAP[int(round(i))] for i in color_idx]
+for i, (color, traj) in enumerate(zip(colors, lhv_trajectories), start=1):
+    ax.plot(
+        x_pct,
+        traj["lhv_da"],
+        color=color,
+        linewidth=2,
+        label=f"CHP plant {i}",
+    )
+ax.set_xlabel("Plastic reduction [%]", fontsize=13)
+ax.set_ylabel("Lower heating value (dry ash-free) [MJ/kg]", fontsize=13)
+ax.tick_params(labelsize=11)
+ax.grid(axis="y", linestyle="--", alpha=0.35)
+ax.legend(fontsize=10, loc="best", framealpha=0.9)
 fig.tight_layout()
 fig.savefig("results/lhv_improvement_by_plastic_reduction.png", dpi=150, bbox_inches="tight")
 plt.close(fig)
