@@ -402,7 +402,7 @@ def fig1_upstream_impacts(
     )
     ax_supply.annotate(
         "BECCS auction\nsubsidy 2029-2046",
-        xy=(1.95, 50),
+        xy=(1.90, 50),
         xytext=(4, 4),
         textcoords="offset points",
         fontsize=10,
