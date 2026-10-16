@@ -1,5 +1,6 @@
 """EMA result figures — each plot function saves one figure; main() generates all."""
 
+import re
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -21,8 +22,8 @@ MAC_UNCOVERED_COLOR = FIG2_KPI7_COLOR  # residual abatement cost
 MAC_DEFAULT_COSTS = [90.0, 100.0, 110.0, 120.0, 135.0, 150.0, 155.0, 165.0, 180.0, 195.0]
 MAC_DEFAULT_WIDTHS = [420.0, 400.0, 380.0, 350.0, 320.0, 300.0, 180.0, 160.0, 170.0, 150.0]
 MAC_HIGHLIGHT_COUNT = 6
-FIG4_CCS_COLOR = "#4477AA"
-FIG4_CCU_COLOR = "#62A7A6"
+FIG4_CCS_COLOR = plt.cm.magma(0.625)
+FIG4_CCU_COLOR = FIG2_HIGH_COLOR
 FEE_COLORS = {
     fee: plt.cm.magma(t)
     for fee, t in zip(EPR_FEE_LEVELS, np.linspace(0.1, 0.8, len(EPR_FEE_LEVELS)))
@@ -541,12 +542,12 @@ def _boxplot_by_kpi14(
 def fig2_carbon_treated(
     results_df: pd.DataFrame,
     out_path: str = "results/fig2_carbon_treated.png",
-    n_bins: int = 5,
+    n_bins: int = 6,
     show: bool = False,
     debug: bool = False,
 ) -> plt.Figure | None:
     """
-    Three policy panels: carbon treated [ktCO₂eq/a] vs KPI14 — 5 box plots per panel.
+    Three policy panels: carbon treated [ktCO₂eq/a] vs KPI14 — 6 box plots per panel.
 
     Mitigation — KPI2 + KPI3 [ktCO₂/a]; Recovery & Replacement — (KPI4 + KPI5) × 44/32.
     All scenarios included (no CRC/ETS/pmethanol splits); KPI14 quantile bins per panel.
@@ -787,11 +788,9 @@ def fig3_finance_robustness(
 
 def _plant_cost_columns(plants_df: pd.DataFrame) -> tuple[list[str], list[str], list[str]]:
     """CCS/CCU cost column names and plant display labels in plants_df order."""
-    from model import safe_plant_key
-
     ccs_cols, ccu_cols, labels = [], [], []
     for name in plants_df["Name"]:
-        key = safe_plant_key(name)
+        key = re.sub(r"[^\w]+", "_", str(name).strip())
         ccs_cols.append(f"plant_{key}_ccs_cost_eur_tco2")
         ccu_cols.append(f"plant_{key}_ccu_cost_eur_tmeoh")
         labels.append(str(name).replace(" ", "\n"))
@@ -811,7 +810,9 @@ def fig4_plant_costs(
       (2) Replacement levelized methanol cost vs number of plants financed/replaced (KPI1).
     """
     plants_df = pd.read_csv(plants_path)
-    ccs_cols, ccu_cols, plant_labels = _plant_cost_columns(plants_df)
+    ccs_cols, ccu_cols, _ = _plant_cost_columns(plants_df)
+    n_plants = len(plants_df)
+    plant_labels = [f"CHP plant {i + 1}" for i in range(n_plants)]
     needed = set(ccs_cols + ccu_cols + ["EPR_design", "KPI1", "replacement_cost"])
     missing = needed - set(results_df.columns)
     if missing:
@@ -828,8 +829,7 @@ def fig4_plant_costs(
     rec = df.loc[df["EPR_design"] == "Recovery"]
     repl = df.loc[df["EPR_design"] == "Replacement"]
 
-    fig, (ax_plants, ax_repl) = plt.subplots(2, 1, figsize=(10, 9))
-    n_plants = len(plant_labels)
+    fig, (ax_plants, ax_repl) = plt.subplots(2, 1, figsize=(8, 10))
     box_width = 0.34
     offsets = (-box_width / 2, box_width / 2)
     ccs_data, ccu_data = [], []
@@ -861,8 +861,7 @@ def fig4_plant_costs(
     ax_plants.set_xticklabels(plant_labels, fontsize=9, rotation=35, ha="right")
     ax_plants.set_ylabel("Levelized cost [EUR/t]", fontsize=13)
     ax_plants.set_title(
-        "Per-plant levelized costs across scenarios\n"
-        "CCS (Mitigation) and CCU (Recovery)",
+        "(a) Per-plant levelized CCS/CCU costs across scenarios",
         fontsize=13,
     )
     ax_plants.tick_params(axis="y", labelsize=11)
@@ -899,17 +898,15 @@ def fig4_plant_costs(
 
     ax_repl.set_xticks(kpi_levels)
     ax_repl.set_xticklabels([str(int(k)) for k in kpi_levels], fontsize=11)
-    ax_repl.set_xlabel("Plants financed / replaced [n]", fontsize=13)
+    ax_repl.set_xlabel("Plants replaced [n]", fontsize=13)
     ax_repl.set_ylabel("Levelized methanol cost [EUR/t MeOH]", fontsize=13)
     ax_repl.set_title(
-        "Replacement hub cost vs fleet size\n"
-        "subsidized cases only (replacement_cost)",
+        "(b) Levelized methanol costs if replacing CHP plants",
         fontsize=13,
     )
     ax_repl.tick_params(axis="y", labelsize=11)
     ax_repl.grid(axis="y", linestyle="--", alpha=0.4)
 
-    fig.suptitle("Plant and replacement levelized costs", fontsize=14, y=1.01)
     fig.tight_layout()
 
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)

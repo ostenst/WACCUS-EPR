@@ -37,20 +37,34 @@ for _, plant in plants_df.iterrows():
     nO_pl = nC_pl * 0.161 # [kmolO_pl/yr]
     ntot_pl = nC_pl + nH_pl + nO_pl # [kmol_pl/yr]
 
-    # nH_bio = nC_bio * 1.44 # [kmolH_bio/yr] # I think this was wet biomasss... cf. Beiron (2026)
-    # nO_bio = nC_bio * 0.66 # [kmolO_bio/yr]
+    nH_bio = nC_bio * 1.44 # [kmolH_bio/yr] # I think this was wet biomasss... cf. Beiron (2026)
+    nO_bio = nC_bio * 0.66 # [kmolO_bio/yr]
     # nH_bio = nC_bio * 0.22 # [kmolH_bio/yr] # But this "dry" from Beiron is insane! I think its "without ANY oxygen!"
     # nO_bio = nC_bio * 0 # [kmolO_bio/yr]
-    nH_bio = nC_bio * 1.23 # [kmolH_bio/yr] # Try this Table 5. forest residues: https://www.sciencedirect.com/science/article/pii/S0016236109004967#aep-section-id14
-    nO_bio = nC_bio * 0.58 # [kmolO_bio/yr]
+    # nH_bio = nC_bio * 1.23 # [kmolH_bio/yr] # Try this Table 5. forest residues: https://www.sciencedirect.com/science/article/pii/S0016236109004967#aep-section-id14
+    # nO_bio = nC_bio * 0.58 # [kmolO_bio/yr]
 
     ntot_bio = nC_bio + nH_bio + nO_bio # [kmol_bio/yr]
 
     # Estimating (dry ash-free) mass flows and then LHV using Dulong's formula (Hosokai et al., 2016):
     m_pl = nC_pl * 12 + nH_pl * 1 + nO_pl * 16 # [kg_pl/yr] d.a.
     m_bio = nC_bio * 12 + nH_bio * 1 + nO_bio * 16 # [kg_bio/yr] d.a.
+
+    print(" ")
+    print("xC_pl:", nC_pl*12/m_pl)
+    print("xH_pl:", nH_pl*1/m_pl)
+    print("xO_pl:", nO_pl*16/m_pl)
+    print(" ")
+    print("xC_bio:", nC_bio*12/m_bio)
+    print("xH_bio:", nH_bio*1/m_bio)
+    print("xO_bio:", nO_bio*16/m_bio)
+
     LHV_pl = 38.2*(nC_pl*12/m_pl) + 84.9*(nH_pl*1/m_pl - (nO_pl*16/m_pl)/8) - 0.62 # [MJ/kg d.a.]
     LHV_bio = 38.2*(nC_bio*12/m_bio) + 84.9*(nH_bio*1/m_bio - (nO_bio*16/m_bio)/8) - 0.62 # [MJ/kg d.a.]
+
+    print(" ")
+    print("LHV_pl:", LHV_pl)
+    print("LHV_bio:", LHV_bio)
 
     x_ash_dry = 0.206 # [kg_ash/kg_dry] calc. based on the DRY waste, Hammar
     x_h2o_frac = 0.360 # [kg_moisture/kg_total] calc. based on wet waste, Hammar
@@ -221,6 +235,8 @@ for i, (color, traj) in enumerate(zip(colors, lhv_trajectories), start=1):
         linewidth=2,
         label=f"CHP plant {i}",
     )
+ymin, ymax = ax.get_ylim()
+ax.set_ylim(16, ymax)
 ax.set_xlabel("Plastic reduction [%]", fontsize=13)
 ax.set_ylabel("Lower heating value (dry ash-free) [MJ/kg]", fontsize=13)
 ax.tick_params(labelsize=11)
