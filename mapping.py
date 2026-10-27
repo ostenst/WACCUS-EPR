@@ -10,6 +10,7 @@ MAIN_PLANT_LEGEND_LABELS = {
     "CCU": "CHP with CCU [ktCO2eq p.a.]",
     "gasification": "Replaced CHP [ktCO2eq p.a.]",
 }
+GASIFICATION_HUB_COLOR = "#41BCAE"
 
 
 def _normalize_plant_name(name) -> str:
@@ -103,7 +104,7 @@ def _map_bubble_legend(
     labels.append(MAIN_PLANT_LEGEND_LABELS[mode])
 
     if mode == "gasification":
-        handles.append(_bubble_legend_handle(ccu_color, alpha=0.8))
+        handles.append(_bubble_legend_handle(GASIFICATION_HUB_COLOR, alpha=0.8))
         labels.append("Methanol via gasification [ktCO2eq p.a.]")
 
     if debug:
@@ -197,7 +198,7 @@ def plot_europe(mode="CCS", debug=False):
             15.088126,
             58.528987,
             s=s_val,
-            color=ccu_color,
+            color=GASIFICATION_HUB_COLOR,
             alpha=0.8,
             edgecolor="black",
             linewidth=1,
@@ -258,4 +259,4 @@ def plot_europe(mode="CCS", debug=False):
 
 
 if __name__ == "__main__":
-    plot_europe(mode="CCS")
+    plot_europe(mode="gasification")
